@@ -33,22 +33,15 @@ hpa:
   minReplicas: 2
   maxReplicas: 5
   targetCPUUtilizationPercentage: 80
-  # targetMemoryUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
 
 # Test targets configuration for alerts and metrics
-testTargets:
-  http:
-    enabled: false
-    image:
-      repository: mccutchen/go-httpbin
-      tag: "v2.14.0"
-      pullPolicy: IfNotPresent
-  grpc:
-    enabled: false
-    image:
-      repository: connectrpc/conformance
-      tag: "v1.1.6"
-      pullPolicy: IfNotPresent
+http:
+  enabled: false
+  image:
+    repository: mccutchen/go-httpbin
+    tag: "v2.14.0"
+    pullPolicy: IfNotPresent
 
 # TopologySpreadConstraints configuration
 topologySpreadConstraints:
