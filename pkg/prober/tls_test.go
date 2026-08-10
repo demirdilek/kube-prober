@@ -93,7 +93,12 @@ func TestTLSProber_ProbeTLSTarget(t *testing.T) {
 		{
 			name:     "Connection refused for TLS",
 			target:   "tls://127.0.0.1:59843",
-			expected: CategoryConnect,
+			expected: CategoryConnectionRefused,
+		},
+		{
+			name:     "Invalid URL format for TLS",
+			target:   "%%%invalid-tls-target",
+			expected: CategoryUnknown,
 		},
 	}
 

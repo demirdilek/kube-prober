@@ -2,9 +2,9 @@ package prober
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"time"
-	"io"
 )
 
 type HTTPProber struct {
@@ -31,7 +31,7 @@ func (p *HTTPProber) ProbeHTTPTarget(ctx context.Context, target string) ErrorCa
 	if resp != nil {
 		statusCode = resp.StatusCode
 		// Copy remaining body to io.Discard and close to enable TCP connection reuse
-		_, _ = io.Copy(io.Discard, resp.Body)
+		_, _ = io.CopyN(io.Discard, resp.Body, 1024*1024) // Copy up to 1MB to discard
 		resp.Body.Close()
 	}
 

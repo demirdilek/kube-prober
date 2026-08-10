@@ -27,16 +27,15 @@ func (p *TLSProber) ProbeTLSTarget(ctx context.Context, target string) ErrorCate
 	parsedURL, err := url.Parse(target)
 	if err != nil {
 		return CategoryUnknown
-	
 	}
-	// Clone the base config so concurrent probes don't cause data races, 
+	// Clone the base config so concurrent probes don't cause data races,
 	// and dynamically inject the SNI ServerName.
 	cfg := p.tlsConfig.Clone()
 	cfg.ServerName = parsedURL.Hostname()
 
 	// Use the injected configuration
 	dialer := &tls.Dialer{
-		Config: p.tlsConfig,
+		Config: cfg,
 	}
 
 	conn, err := dialer.DialContext(ctx, "tcp", parsedURL.Host)

@@ -41,24 +41,27 @@ func TestKubeWatcher_InformerEvents_DynamicPath(t *testing.T) {
 	informerFactory := informers.NewSharedInformerFactory(clientset, 0)
 	endpointSliceInformer := informerFactory.Discovery().V1().EndpointSlices()
 
+	// NEW: Instantiate the Service informer and lister for the test
+	serviceInformer := informerFactory.Core().V1().Services()
+	serviceLister := serviceInformer.Lister()
+
 	_, err = endpointSliceInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		// In TestKubeWatcher_InformerEvents_DynamicPath:
 		AddFunc: func(obj interface{}) {
 			if slice, ok := obj.(*discoveryv1.EndpointSlice); ok {
-				// Parse both scheme and path to satisfy the new UpdateFromEndpointSlice signature
-				scheme, path := watcher.getProbeSchemeAndPath(ctx, slice)
+				// Parse both scheme and path using the new ServiceLister
+				scheme, path := watcher.getProbeSchemeAndPath(slice, serviceLister)
 				registry.UpdateFromEndpointSlice(slice, scheme, path)
 			}
 		},
 	})
-
 	if err != nil {
 		t.Fatalf("failed to add event handler to informer: %v", err)
 	}
 
 	informerFactory.Start(ctx.Done())
 
-	if !cache.WaitForCacheSync(ctx.Done(), endpointSliceInformer.Informer().HasSynced) {
+	// NEW: Wait for BOTH caches to sync (EndpointSlices and Services)
+	if !cache.WaitForCacheSync(ctx.Done(), endpointSliceInformer.Informer().HasSynced, serviceInformer.Informer().HasSynced) {
 		t.Fatal("timed out waiting for informer caches to sync")
 	}
 
@@ -151,7 +154,7 @@ func TestKubeWatcher_WatchPeers(t *testing.T) {
 	if len(peers) != 2 {
 		t.Errorf("Expected 2 peers in the registry, but got %d", len(peers))
 	}
-	
+
 	// Because IPs are sorted by the registry, 10.244.0.100 will always be at index 0
 	if peers[0] != "10.244.0.100" || peers[1] != "10.244.0.101" {
 		t.Errorf("Unexpected peer sorting or IPs: %v", peers)

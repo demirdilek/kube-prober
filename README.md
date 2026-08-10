@@ -19,27 +19,14 @@
 
 ## Key Features
 
-- **Event-Driven K8s Target Discovery:** Replaces high-overhead API polling with modern `discoveryv1.EndpointSlice` Kubernetes Informers.
-  - Monitored endpoints are filtered by the Service label `probe: "true"`.
-  - Custom paths can be annotated via `probe/path: "/healthz"`.
-- **Dynamic K8s Targets:** Monitored endpoints are dynamically discovered via Kubernetes API labels (`probe=true`) and custom path annotations (`probe/path="/healthz"`).
-- **6-Tier SRE Error Classification:** Categorizes failures into discrete buckets: `dns_error`, `connection_refused`, `tls_error`, `timeout`, `http_error` (4xx/5xx), and `unknown_error`.
-- **Actionable SRE Diagnostic Hints:** Error metrics and alerts automatically carry context-aware recovery steps (`hint`) for all 6 failure categories (e.g., DNS, TLS, Timeout, HTTP 5xx), significantly lowering Mean Time To Recovery (MTTR) for on-call engineers.
-- **Dynamic Alertmanager Routing:** Clean, non-empty alert notifications dynamically formatted for both Slack ChatOps and high-priority Pushover mobile push notifications.
-- **GitOps Continuous Delivery:** Fully automated deployment, sync, and self-healing managed declaratively via Argo CD.
-- **Declarative Telemetry Stack:** Pre-configured Prometheus monitoring, Grafana sidecars, and Alertmanager routing via `prom-stack-values.yaml`.
-- **Multi-Channel Alert Routing:** Dynamic Alertmanager routing featuring dual-channel notification delivery:
-  - **Slack:** Full audit trail and ChatOps visibility for all alert states (`warning`, `critical`, `RESOLVED`).
-  - **Pushover:** High-priority mobile push notifications (bypassing hardware silent switches via Priority 1) for `critical` incidents.
-- **Production-Grade High Availability (HA):** Built-in resilience features designed for zero-downtime maintenance and load surges:
-  - **PodDisruptionBudget (PDB):** Guarantees minimum pod availability during voluntary node drains and cluster maintenance.
-  - **HorizontalPodAutoscaler (HPA):** Dynamically scales replica capacity based on CPU and memory utilization thresholds.
-  - **Topology Spread Constraints:** Prevents single-point-of-failure scenarios by evenly distributing pods across worker nodes and availability zones.
-- **Application Health & Graceful Shutdown:** Native Kubernetes lifecycle integration for maximum operational safety:
-  - **Health & Readiness Probes:** Exposes `/healthz` (Liveness) and `/readyz` (Readiness) endpoints to prevent routing traffic to unready pods and automatically recover from deadlocks.
-  - **Graceful Teardown:** Captures `SIGINT` and `SIGTERM` OS signals to shut down the HTTP server cleanly and flush all in-flight worker probes without telemetry loss.
-- **Distributed Target Sharding (Rendezvous Hashing):** Seamlessly scales with Kubernetes HPA. Dynamically partitions and distributes target endpoints across all active prober replicas using Highest Random Weight (HRW) hashing. This guarantees zero duplicate probing and a perfectly balanced load distribution during dynamic scale-up/scale-down events.
-- **SLO / SLI & Multi-Window Burn Rate Alerting:** Calculates real-time Availability (99.9%) and Latency (99% < 500ms) SLIs via Prometheus Recording Rules. Emits proactive multi-window burn rate alerts (1h / 5m windows at 14.4x burn rate) to notify on-call engineers before error budgets are fully exhausted.
+- **Event-Driven Target Discovery:** Uses Kubernetes `discoveryv1.EndpointSlice` Informers (filtered by `probe: "true"`) to dynamically discover endpoints without high-overhead API polling.
+- **Multi-Protocol Health Probing:** Native probing handlers for **HTTP/HTTPS**, **TCP**, **TLS** (cert expiry & handshake), and **gRPC** (`grpc.health.v1.Health`). Protocol schemes and custom paths are configurable via Service annotations (`probe/scheme`, `probe/path`).
+- **Multi-Tier SRE Error Classification & Hints:** Categorizes network/protocol failures into distinct SRE buckets (`dns_error`, `tls_error`, `grpc_not_serving`, etc.) and attaches actionable diagnostic hints to metrics and alerts to lower MTTR.
+- **Multi-Channel Alerting (Slack & Pushover):** Pre-configured Alertmanager routing featuring ChatOps audit trails in Slack and high-priority mobile push notifications via Pushover for `critical` incidents.
+- **Distributed Target Sharding (Rendezvous Hashing):** Scales horizontally with Kubernetes HPA by partitioning target endpoints across prober replicas using Highest Random Weight (HRW) hashing, preventing duplicate probes.
+- **SLO / SLI & Burn Rate Alerting:** Computes real-time Availability (99.9%) and Latency SLIs via Prometheus Recording Rules with multi-window burn rate alerts (1h / 5m).
+- **Production-Grade High Availability & Lifecycles:** Features `PodDisruptionBudget` (PDB), `HorizontalPodAutoscaler` (HPA), Topology Spread Constraints, native `/healthz` & `/readyz` K8s probes, and graceful shutdown signal handling (`SIGTERM`).
+- **GitOps Continuous Delivery & Telemetry Stack:** Managed declaratively via Argo CD with auto-provisioned Grafana dashboards and Prometheus rules.
 
 ---
 
@@ -104,24 +91,26 @@ The `kube-prober` microservice acts as the central observability engine. Using a
 ```text
 .
 ├── .github/
-│   └── workflows/          # GitHub Actions CI & Docker Build Pipelines
-├── assets/                 # Documentation Screenshots
+│   └── workflows/          # GitHub Actions CI/CD & Linting Pipelines
+├── assets/                 # Dokumentations-Screenshots & Grafiken
 ├── deploy/
 │   └── argocd/             # Argo CD Application Manifests (GitOps)
 ├── helm/
-│   └── kube-prober/         # Custom Helm Chart (Deployment, RBAC, ServiceMonitor, Dashboard)
-│       ├── dashboards/     # Auto-provisioned Grafana Dashboards
-│       └── templates/      # K8s Resources & Alerting Rules
+│   └── kube-prober/        # Helm Chart (Deployment, RBAC, PrometheusRule, Dashboards)
+│       ├── dashboards/     # Auto-provisionierte Grafana Dashboards
+│       └── templates/      # Kubernetes Ressourcen & Alerting-Regeln
 ├── pkg/
-│   ├── env/                # Environment variable parsing and utilities
-│   ├── kube/               # Kubernetes client initialization & fallback
-│   └── prober/             # Core HTTP Probing Engine, K8s EndpointSlice Informers & Metrics
-│   └── server/             # Health, Readiness, Pprof & Metrics HTTP Server
+│   ├── env/                # Environment-Parsing & Konfigurations-Utilities
+│   ├── kube/               # Kubernetes Client Initialization & Fallback
+│   ├── prober/             # Core Probing Engine (HTTP, TCP, TLS, gRPC), Informer & Metrics
+│   └── server/             # Telemetrie & Health HTTP Server (/metrics, /healthz, /readyz)
+├── scripts/
+│   └── alerts/             # Shell-Skripte zur Simulation von Golden Signals & Alert-Tests
 ├── Dockerfile              # Multi-stage, Multi-arch Build File
-├── Makefile                # Complete Lifecycle Automation (k3d, Argo CD, Helm)
-├── main.go                 # Entry Point & Dynamic K8s Service Watcher
-├── main_test.go            # Unit and Integration Tests
-└── prom-stack-values.yaml  # Prometheus Stack & Alertmanager Routing Config
+├── Makefile                # Lifecycle Automatisierung (k3d, Build, Helm, Alert-Tests)
+├── main.go                 # Microservice Entry Point & Dependency Injection
+├── go.mod                  # Go Modul- & Abhängigkeitsdefinitionen
+└── prom-stack-values.yaml  # Prometheus Stack & Alertmanager Routing Konfiguration
 ```
 
 ---
@@ -195,53 +184,29 @@ Once background port-forwarding is active (`make forward-all`), access the Contr
 
 Real-time telemetry evaluation is managed via Prometheus Alertmanager based on defined thresholds for the 4 Golden Signals. Alerts are pre-classified by severity (`warning` vs. `critical`) and can be seamlessly routed to Webhooks, PagerDuty, Opsgenie, or Slack.
 
+---
+
 ### Simulating Alerts
 
-The setup allows you to simulate threshold violations for different Golden Signals out of the box:
+The setup allows you to simulate threshold violations for different Golden Signals and protocol handlers out of the box using `make`:
 
-#### 1. High Latency Alert
+| Alert Scenario | Description / Target | Trigger Command |
+| :--- | :--- | :--- |
+| **High Latency** | Injects 2s delay (`/delay/2`) to breach p99 latency | `make test-alert-latency` |
+| **High Error Rate** | Deploys HTTP 500 internal server error target | `make test-alert-error` |
+| **Traffic Collapse** | Simulates transport outage via misrouted service port | `make test-alert-traffic` |
+| **Worker Saturation** | Drossels worker pool (`WORKERS=2`) under heavy load | `make test-alert-saturation` |
+| **TCP Connection Refused** | Targets dead port (Layer 4 failure) | `make test-alert-tcp` |
+| **TLS Cert Expiry / Handshake** | Deploys expiring self-signed certificate | `make test-alert-tls-expiry` |
+| **gRPC Service Failure** | Targets gRPC endpoint without `grpc.health.v1` | `make test-alert-grpc` |
 
-Simulate response delay (`/delay/2`) to breach p99 latency thresholds:
+#### 🧹 Cleanup
 
-```bash
-make test-alert-latency
-```
-
-#### 2. High Error Rate Alert
-
-Deploy an artificial target returning HTTP 500 Internal Server Errors:
-
-```bash
-make test-alert-error
-```
-
-#### 3. Traffic Collapse Alert
-
-Simulate a severe network/transport outage by misrouting a target service port to an invalid endpoint (Port 9999):
-
-```bash
-make test-alert-traffic
-```
-
-#### 4. Worker Saturation Alert
-
-Saturate prober queue capacity by temporarily reducing the worker pool down to 2 goroutines:
-
-```bash
-make test-alert-saturation
-```
-
-##### 🧹 Cleanup Alert Simulations
-
-To clean up all deployed artificial test targets, restore patched service ports, and reset the default WORKERS capacity, run:
+To teardown all simulated targets and restore the prober baseline, run:
 
 ```bash
 make test-alert-clean
 ```
-
-Once triggered, the Go engine dynamically adapts probing via its event-driven Kubernetes Informer stream, exposing metrics for Prometheus to evaluate and escalate to Alertmanager.
-
----
 
 ### Multi-Channel Alert Routing Matrix
 

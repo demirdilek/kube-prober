@@ -33,12 +33,11 @@ var (
 	)
 
 	// Saturation gauges current capacity by counting active concurrent worker goroutines.
-	SaturationGauge = prometheus.NewGaugeVec(
+	SaturationGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "kube_prober_saturation_active_workers",
 			Help: "Number of active concurrent probing workers (Saturation).",
 		},
-		[]string{"target"},
 	)
 
 	// Max workers capacity metric (Saturation capacity)
@@ -67,6 +66,19 @@ var (
 	)
 )
 
+// Populate static category hints directly from ErrorCategory.Hint()
+var categories = []ErrorCategory{
+	CategoryDNS,
+	CategoryConnectionRefused,
+	CategoryTLS,
+	CategoryTimeout,
+	CategoryHTTP,
+	CategoryGRPCNotServing,
+	CategoryUnhealthy,
+	CategoryAuth,
+	CategoryUnknown,
+}
+
 // RegisterMetrics registers all prober metrics with the provided Prometheus registry.
 func RegisterMetrics(reg prometheus.Registerer) {
 	reg.MustRegister(
@@ -79,16 +91,6 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		TLSCertExpiryGauge,
 	)
 
-	// Populate static category hints directly from ErrorCategory.Hint()
-	categories := []ErrorCategory{
-		CategoryDNS,
-		CategoryConnect,
-		CategoryTLS,
-		CategoryTimeout,
-		CategoryHTTP,
-		CategoryUnknown,
-	}
-
 	for _, cat := range categories {
 		CategoryHintInfo.WithLabelValues(string(cat), cat.Hint()).Set(1)
 	}
@@ -98,16 +100,18 @@ func RegisterMetrics(reg prometheus.Registerer) {
 func DeleteTargetMetrics(target string) {
 	LatencyHistogram.DeleteLabelValues(target)
 	TrafficCounter.DeleteLabelValues(target)
-	SaturationGauge.DeleteLabelValues(target)
 	TLSCertExpiryGauge.DeleteLabelValues(target)
 
 	// Clean up all error categories for this target
 	categories := []ErrorCategory{
 		CategoryDNS,
-		CategoryConnect,
+		CategoryConnectionRefused,
 		CategoryTLS,
 		CategoryTimeout,
 		CategoryHTTP,
+		CategoryGRPCNotServing,
+		CategoryUnhealthy,
+		CategoryAuth,
 		CategoryUnknown,
 	}
 	for _, cat := range categories {

@@ -28,7 +28,7 @@ func TestTCPProber_ProbeTCPTarget(t *testing.T) {
 
 	validTarget := "tcp://" + listener.Addr().String()
 	// Use an arbitrary unassigned high port to simulate connection refused
-	refusedTarget := "tcp://127.0.0.1:59842" 
+	refusedTarget := "tcp://127.0.0.1:59842"
 
 	prober := NewTCPProber()
 
@@ -48,7 +48,7 @@ func TestTCPProber_ProbeTCPTarget(t *testing.T) {
 			name:     "Connection refused",
 			target:   refusedTarget,
 			timeout:  2 * time.Second,
-			expected: CategoryConnect,
+			expected: CategoryConnectionRefused,
 		},
 		{
 			name:     "Invalid URL format",
@@ -57,7 +57,7 @@ func TestTCPProber_ProbeTCPTarget(t *testing.T) {
 			expected: CategoryUnknown,
 		},
 		{
-			name:     "Connection timeout",
+			name: "Connection timeout",
 			// Use a non-routable IP (TEST-NET-1) to force a timeout, combined with a tiny context deadline
 			target:   "tcp://198.51.100.1:80",
 			timeout:  1 * time.Millisecond,

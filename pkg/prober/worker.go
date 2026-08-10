@@ -13,20 +13,26 @@ type Job struct {
 
 // ProbeTarget executes a probe against a target and records 4 Golden Signals metrics.
 func ProbeTarget(ctx context.Context, target string, dispatcher *Dispatcher) {
-	SaturationGauge.WithLabelValues(target).Inc()
-	defer SaturationGauge.WithLabelValues(target).Dec()
+	SaturationGauge.Inc()
+	defer SaturationGauge.Dec()
 
 	TrafficCounter.WithLabelValues(target).Inc()
 
+	// Create a new context with a timeout for the probe execution
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
 	startTime := time.Now()
-	errCat := dispatcher.Execute(ctx, target)
+	errCat := dispatcher.Execute(probeCtx, target)
 	duration := time.Since(startTime).Seconds()
 
 	LatencyHistogram.WithLabelValues(target).Observe(duration)
 
+	// Record the error category if there was an error, otherwise log success
 	if errCat != "" {
 		ErrorCounter.WithLabelValues(target, string(errCat)).Inc()
-		slog.Warn("Target probing failed",
+		slog.Warn(
+			"Target probing failed",
 			"target", target,
 			"error_category", errCat,
 			"hint", errCat.Hint(),

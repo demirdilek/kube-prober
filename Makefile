@@ -1,7 +1,7 @@
 -include .env
 export
 
-.PHONY: help lint test test-coverage k3d-up cache-test-images docker-build prometheus-install install-argocd apply-gitops bootstrap local-deploy clean k3d-down forward-all stop-forward argocd-pass hard-reset test-targets-enable test-targets-disable test-alert-error test-alert-latency test-alert-traffic test-alert-saturation test-alert-tcp test-alert-tls-expiry test-alert-tls-handshake test-alert-grpc test-alert-clean
+.PHONY: help lint test test-coverage k3d-up cache-test-images prometheus-install install-argocd apply-gitops bootstrap local-deploy clean k3d-down forward-all stop-forward argocd-pass argocd-set-pass hard-reset test-targets-enable test-targets-disable test-alert-error test-alert-latency test-alert-traffic test-alert-saturation test-alert-tcp test-alert-tls-expiry test-alert-tls-handshake test-alert-grpc test-alert-clean
 
 .DEFAULT_GOAL := help
 
@@ -9,7 +9,9 @@ export
 IMAGE_REPO=ghcr.io/demirdilek/kube-prober
 IMAGE_TAG=v0.1.0
 
-# Argo CD & Helm variables
+# Helm & Argo CD variables
+RELEASE_NAME=kube-prober
+CHART_DIR=./helm/kube-prober
 ARGO_APP=kube-prober
 ARGO_NAMESPACE=argocd
 ARGOCD_MANIFEST_URL ?= https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
@@ -49,17 +51,16 @@ bootstrap: k3d-up cache-test-images prometheus-install install-argocd apply-gito
 
 k3d-up: 
 	@if k3d cluster list | grep -q "mycluster"; then \
-	echo "Cluster 'mycluster' already exists."; \
+		echo "Cluster 'mycluster' already exists."; \
 	else \
-	k3d cluster create mycluster --api-port 6443 -p "80:80@loadbalancer" -p "443:443@loadbalancer" --agents 2; \
+		k3d cluster create mycluster --api-port 6443 -p "80:80@loadbalancer" -p "443:443@loadbalancer" --agents 2; \
 	fi
 
 cache-test-images: 
 	@echo "==> Pulling and caching external test images..."
 	docker pull mccutchen/go-httpbin:v2.14.0
-	k3d image import mccutchen/go-httpbin:v2.14.0 -c mycluster
-	docker pull connectrpc/conformance:v1.1.6
-	k3d image import connectrpc/conformance:v1.1.6 -c mycluster
+	docker pull stefanprodan/podinfo:6.6.0
+	k3d image import mccutchen/go-httpbin:v2.14.0 connectrpc/conformance:v6.6.0 -c mycluster
 
 prometheus-install: 
 	@./scripts/deploy-prometheus.sh
@@ -77,28 +78,26 @@ apply-gitops:
 
 # --- 3. INNER DEV LOOP (Run frequently during development) ---
 
-docker-build: lint test 
-	@echo "==> Building Docker image..."
-	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) .
 
-local-deploy: docker-build ## Fast local rebuild and Argo CD deployment
-	@echo "==> Importing local image into k3d cache..."
+local-deploy: argocd-local-enable
+	@echo "==> Building Docker image locally ($(IMAGE_TAG))..."
+	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) .
+	@echo "==> Importing image into k3d cluster..."
 	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
-	@echo "==> Updating image tag via Argo CD and forcing sync..."
-	argocd app set $(ARGO_APP) --helm-set image.tag=$(IMAGE_TAG) --core
-	argocd app sync $(ARGO_APP) --core
-	@echo "==> Restarting pods to pull the newly imported image..."
-	kubectl rollout restart deployment $(ARGO_APP)
+	@echo "==> Restarting deployment..."
+	kubectl rollout restart deployment kube-prober
+
+
 
 # --- 4. SRE FAULT INJECTION & TESTS ---
 
-test-targets-enable: ## Enable HTTP test targets via Argo CD
-	argocd app set $(ARGO_APP) --helm-set httpbin.enabled=true --core
-	argocd app sync $(ARGO_APP) --core
+test-targets-enable: ## Scale up test targets to simulate traffic and latency
+	@echo "Enabling test targets (httpbin)..."
+	kubectl scale deployment httpbin --replicas=1 -n default 2>/dev/null || true
 
-test-targets-disable: ## Disable HTTP test targets via Argo CD
-	argocd app unset $(ARGO_APP) --helm-set httpbin.enabled --core
-	argocd app sync $(ARGO_APP) --core
+test-targets-disable: ## Scale down test targets to 0 replicas (clean baseline)
+	@echo "Disabling test targets to avoid resource usage..."
+	kubectl scale deployment httpbin --replicas=0 -n default 2>/dev/null || true
 
 test-alert-error: ## Simulate High Error Rate (HTTP 500)
 	@./scripts/alerts/trigger-error.sh
@@ -137,9 +136,28 @@ stop-forward: ## Stop background port-forwarding
 	@rm -f .argo.pid .prom.pid .grafana.pid
 	@echo "Stopped all port-forwards."
 
+argocd-login: ## Login to Argo CD CLI
+	@argocd login localhost:8080 --username admin --insecure
+
+argocd-local-enable: ## Pausing Argo CD auto-sync to avoid ans sync with local changes...
+	@echo "==> Pausing Argo CD auto-sync to avoid ans sync with local changes..."
+	@argocd app set kube-prober --sync-policy none
+	@argocd app sync kube-prober --local ./helm/kube-prober/
+
+argocd-local-disable: ## Re-enable Argo CD auto-sync after local changes are done
+	@echo "==> Re-enabling Argo CD auto-sync..."
+	@argocd app set kube-prober --sync-policy automated
+
 argocd-pass: ## Retrieve initial admin password for Argo CD UI
 	@echo "==> Argo CD Initial Admin Password:"
 	@kubectl -n argocd get secret argocd-initialadmin-secret -o jsonpath="{.data.password}" 2>/dev/null | base64 -d || echo "Initial secret deleted." ; echo""
+
+argocd-set-pass: ## Set a custom Argo CD admin password
+	@MYPASS="admin1234"; \
+	echo "==> Updating Argo CD admin password..."; \
+	HASH=$$(docker run --rm quay.io/argoproj/argocd:latest argocd account bcrypt --password "$$MYPASS"); \
+	kubectl patch secret argocd-secret -n argocd -p "{\"stringData\": {\"admin.password\": \"$$HASH\", \"admin.passwordMtime\": \"$$(date -u +%FT%TZ)\"}}"; \
+	echo "==> Password successfully updated to: $$MYPASS"
 
 clean: ## Clean up temporary build files
 	rm -f coverage.out coverage.html .argo.pid .prom.pid .grafana.pid

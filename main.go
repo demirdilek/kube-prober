@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -10,14 +11,13 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"crypto/tls"
+
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/demirdilek/kube-prober/pkg/prober"
-	"github.com/demirdilek/kube-prober/pkg/server"
 	"github.com/demirdilek/kube-prober/pkg/env"
 	"github.com/demirdilek/kube-prober/pkg/kube"
-
+	"github.com/demirdilek/kube-prober/pkg/prober"
+	"github.com/demirdilek/kube-prober/pkg/server"
 )
 
 func init() {
@@ -65,6 +65,10 @@ func main() {
 	tlsProber := prober.NewTLSProber(tlsCfg)
 	dispatcher.Register("tls", tlsProber.ProbeTLSTarget)
 
+	// Register gRPC handlers
+	grpcProber := prober.NewGRPCProber(tlsCfg)
+	dispatcher.Register("grpc", grpcProber.ProbeGRPCTarget)
+
 	// Setup graceful shutdown context listening for SIGINT and SIGTERM OS signals
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -78,9 +82,13 @@ func main() {
 		go prober.WorkerPool(ctx, jobs, dispatcher, &wg)
 	}
 
-	clientset := kube.InitClient()
+	clientset, err := kube.InitClient()
+	if err != nil {
+		slog.Error("Initialization failed", "error", err)
+		os.Exit(1)
+	}
 	registry := prober.NewRegistry()
-	
+
 	// Retrieve local pod IP via Downward API for Rendezvous Hashing target ownership calculations
 	selfIP := os.Getenv("POD_IP")
 	if selfIP != "" {
@@ -94,11 +102,11 @@ func main() {
 	go watcher.WatchPeers(ctx)
 
 	// 2. Start the EndpointSlice informer in a background goroutine to stream target updates asynchronously
-    go func() {
-        if err := watcher.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
-            slog.Error("Informer watcher stopped", "error", err)
-        }
-    }()
+	go func() {
+		if err := watcher.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("Informer watcher stopped", "error", err)
+		}
+	}()
 
 	activeSchedulers := make(map[string]context.CancelFunc)
 	var schedMu sync.Mutex
@@ -111,26 +119,30 @@ func main() {
 				return
 			case evt := <-registry.Events:
 				schedMu.Lock()
-				
+
 				if evt.IsAdded {
 					// Target assigned to this replica: start local periodic probe scheduler
 					if _, exists := activeSchedulers[evt.Target]; !exists {
 						slog.Info("New target discovered", "target", evt.Target)
 						schedCtx, schedCancel := context.WithCancel(ctx)
 						activeSchedulers[evt.Target] = schedCancel
-						
+
 						wg.Add(1)
 						go prober.TargetScheduler(schedCtx, evt.Target, jobs, probeInterval, &wg)
 					}
-					} else {
-							// Target revoked or deleted: cancel local scheduler and purge metrics
-							if cancelFunc, exists := activeSchedulers[evt.Target]; exists {
-							slog.Info("Target removed", "target", evt.Target)
-							cancelFunc()
-							delete(activeSchedulers, evt.Target)
-							prober.DeleteTargetMetrics(evt.Target) // <--- Clean up metrics here
-						}
-					}	
+				} else {
+					// Target revoked or deleted: cancel local scheduler and purge metrics
+					if cancelFunc, exists := activeSchedulers[evt.Target]; exists {
+						slog.Info("Target removed", "target", evt.Target)
+						cancelFunc()
+						delete(activeSchedulers, evt.Target)
+						// Clean up all metrics associated with the removed target
+						go func(t string) {
+							time.Sleep(6 * time.Second) // 1s grace period to allow in-flight probes to finish
+							prober.DeleteTargetMetrics(t)
+						}(evt.Target)
+					}
+				}
 				schedMu.Unlock()
 			}
 		}

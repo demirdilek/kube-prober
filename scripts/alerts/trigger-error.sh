@@ -21,7 +21,8 @@ spec:
     spec:
       containers:
         - name: httpbin
-          image: mccutchen/go-httpbin:latest
+          image: mccutchen/go-httpbin:v2.14.0
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
 ---
@@ -33,6 +34,7 @@ metadata:
   labels:
     probe: "true"
   annotations:
+    probe/scheme: "http"
     probe/path: "/status/500"
 spec:
   ports:

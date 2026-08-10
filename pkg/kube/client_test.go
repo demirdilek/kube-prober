@@ -29,11 +29,14 @@ current-context: dummy
 users:
 - name: dummy
 `
-	if err := os.WriteFile(fakeKubeconfig, []byte(dummyConfig), 0600); err != nil {
+	if err := os.WriteFile(fakeKubeconfig, []byte(dummyConfig), 0o600); err != nil {
 		t.Fatalf("failed to write dummy kubeconfig: %v", err)
 	}
 
-	clientset := InitClient()
+	clientset, err := InitClient()
+	if err != nil {
+		t.Fatalf("expected no error initializing client, got: %v", err)
+	}
 	if clientset == nil {
 		t.Fatal("expected non-nil kubernetes Clientset")
 	}

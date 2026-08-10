@@ -37,13 +37,13 @@ This document outlines the planned improvements, architectural refinements, and 
 - [ ] **Core SRE Protocols for Probing & Monitoring**
   - [X] **TCP:** Layer 4 connectivity & banner checks for databases/caches.
   - [X] **TLS / SSL:** Certificate expiry tracking and handshake validation.
-  - [] **gRPC:** Internal microservices & control plane (`grpc.health.v1.Health`).
+  - [X] **gRPC:** Internal microservices & control plane (`grpc.health.v1.Health`).
   - [] **DNS:** Resolution time and correctness for critical service lookups.
 - [ ] **SRE Dashboard & Observability Hardening**
   - [x] Add 4 Golden Signals visualization panels.
-  - [ ] Add dedicated TLS Certificate Expiry tracking panel (stat/gauge).
-  - [ ] Add TCP Target Availability & Protocol Error Breakdown panels.
-  - [ ] Add SLO Error Budget Burn Rate panel based on recording rules.
+  - [X] Add dedicated TLS Certificate Expiry tracking panel (stat/gauge).
+  - [X] Add TCP Target Availability & Protocol Error Breakdown panels.
+  - [X] Add SLO Error Budget Burn Rate panel based on recording rules.
 - [ ] **Chaos Engineering Test Suites**
   - Define Chaos Mesh or LitmusChaos scenarios to validate telemetry accuracy during simulated network latency, packet loss, and pod eviction events.
 - [ ] **v1.2.0 — Multi-Zone Vantage Point Probing & Follow-the-Sun Alerting:**
@@ -66,3 +66,10 @@ This document outlines the planned improvements, architectural refinements, and 
   - Expose internal metrics for active probe counts, request volumes, and resource consumption to support billing, tiering, and usage tracking for a SaaS business model.
 - [ ] **Enterprise Secrets Management Integration**
   - Native integration with HashiCorp Vault or external secret operators for automated, secure injection of tenant-specific webhook credentials and tokens.
+
+## Phase 5: Cloud Native Standards & Developer Experience
+
+- [ ] **OpenTelemetry (OTel):** Migrate from vendor-specific Prometheus client libraries to the OpenTelemetry standard for emitting the 4 Golden Signals natively from the Go application.
+- [ ] **Skaffold Integration:** Standardize the inner development loop by transitioning from the custom Makefile to Google's Skaffold for hermetic, fast-iterating local Kubernetes deployments.
+- [ ] **SLOs as Code:** Define Service Level Objectives and Error Budgets declaratively using tools like Sloth to automatically generate complex, multi-window burn rate alerts.
+- [ ] **Context-Aware Structured Logging:** Integrate Go's native `slog` with OpenTelemetry to inject Trace IDs into log entries, enabling seamless navigation from a firing alert directly to the failing request.

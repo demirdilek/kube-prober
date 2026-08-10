@@ -98,6 +98,17 @@ spec:
             summary: '{{`TCP connection refused on target {{ $labels.target }}`}}'
             hint: "Target pod might be down, crash-looping, or rejecting connections on specified port."
 
+        # gRPC Health Check Failure (NOT_SERVING)
+        - alert: gRPCServiceNotServing
+          expr: sum(rate(kube_prober_errors_total{category="grpc_not_serving"}[2m])) by (target) > 0
+          for: 1m
+          labels:
+            severity: critical
+            app: kube-prober
+          annotations:
+            summary: '{{`gRPC Health Check failed on target {{ $labels.target }}`}}'
+            hint: "The gRPC service is reachable via TCP, but explicitly reports NOT_SERVING. Check application logs."
+
     - name: kube-prober-slo-recording-rules
       rules:
         # Availability: Error ratio (1 - success rate)

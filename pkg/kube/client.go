@@ -1,7 +1,7 @@
 package kube
 
 import (
-	"log/slog"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -12,7 +12,7 @@ import (
 
 // InitClient initializes a Kubernetes clientset with automatic fallback:
 // uses InClusterConfig when running inside K8s, or local kubeconfig (~/.kube/config) during local development.
-func InitClient() *kubernetes.Clientset {
+func InitClient() (*kubernetes.Clientset, error) {
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		kubeconfig := os.Getenv("KUBECONFIG")
@@ -21,14 +21,14 @@ func InitClient() *kubernetes.Clientset {
 		}
 		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
 		if err != nil {
-			slog.Error("Failed to build k8s config", "error", err)
-			os.Exit(1)
+			return nil, fmt.Errorf("failed to build k8s config: %w", err)
 		}
 	}
+
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		slog.Error("Failed to create k8s clientset", "error", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to create k8s clientset: %w", err)
 	}
-	return clientset
+
+	return clientset, nil
 }

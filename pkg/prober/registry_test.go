@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -52,8 +53,7 @@ func TestRegistry_UpdateAndRemoveEndpointSlice(t *testing.T) {
 	registry := NewRegistry()
 
 	port8080 := int32(8080)
-	
-	// Here is where sliceWithPort is defined
+
 	sliceWithPort := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-slice-1",
@@ -70,6 +70,9 @@ func TestRegistry_UpdateAndRemoveEndpointSlice(t *testing.T) {
 	// 1. Test Add with custom path and explicit http scheme
 	customPath := "/custom-health"
 	registry.UpdateFromEndpointSlice(sliceWithPort, "http", customPath)
+
+	// WARTEN, bis die asynchrone Event-Goroutine fertig ist
+	time.Sleep(50 * time.Millisecond)
 
 	targets := registry.GetTargets()
 	if len(targets) != 2 {
@@ -90,12 +93,20 @@ func TestRegistry_UpdateAndRemoveEndpointSlice(t *testing.T) {
 
 	// 2. Test Idempotency (adding the same targets again should not duplicate events)
 	registry.UpdateFromEndpointSlice(sliceWithPort, "http", customPath)
+
+	// WARTEN
+	time.Sleep(50 * time.Millisecond)
+
 	if len(registry.Events) != 2 {
 		t.Errorf("expected 2 events total (0 new), got %d", len(registry.Events))
 	}
 
 	// 3. Test Remove with custom path
 	registry.RemoveEndpointSlice(sliceWithPort, "http", customPath)
+
+	// WARTEN
+	time.Sleep(50 * time.Millisecond)
+
 	targets = registry.GetTargets()
 
 	if len(targets) != 0 {
@@ -115,13 +126,17 @@ func TestRegistry_ConcurrencySafety(t *testing.T) {
 		go func(addr string) {
 			defer wg.Done()
 			port := int32(80)
-			
-			// Here is where the slice is defined inside the goroutine
+
+			// Each goroutine creates its own EndpointSlice with a unique name to avoid conflicts
 			slice := &discoveryv1.EndpointSlice{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-slice-" + addr, // Eindeutiger Name pro Goroutine
+					Namespace: "default",
+				},
 				Ports:     []discoveryv1.EndpointPort{{Port: &port}},
 				Endpoints: []discoveryv1.Endpoint{{Addresses: []string{addr}}},
 			}
-			
+
 			// Updated signature passing the "http" scheme
 			registry.UpdateFromEndpointSlice(slice, "http", "/healthz")
 		}(ip)

@@ -4,12 +4,10 @@ set -euo pipefail
 echo "==> Cleaning up all simulated alert targets & restoring defaults..."
 
 # 1. Alle künstlichen Test-Deployments löschen
-kubectl delete deployment httpbin-error httpbin-latency-test httpbin-sat-1 httpbin-sat-2 --ignore-not-found
-kubectl delete service httpbin-error httpbin-latency-test httpbin-sat-1 httpbin-sat-2 --ignore-not-found
-kubectl delete deployment httpbin-error httpbin-latency-test httpbin-sat-1 httpbin-sat-2 tcp-test --ignore-not-found
-kubectl delete service httpbin-error httpbin-latency-test httpbin-sat-1 httpbin-sat-2 tcp-test --ignore-not-found
-kubectl delete deployment tls-test --ignore-not-found
-kubectl delete service tls-test --ignore-not-found
+kubectl delete deployment httpbin-error httpbin-latency-test httpbin-sat-1 httpbin-sat-2 tcp-test grpc-test --ignore-not-found
+kubectl delete service httpbin-error httpbin-latency-test httpbin-sat-1 httpbin-sat-2 tcp-test grpc-test --ignore-not-found
+kubectl delete deployment tls-test httpbin-traffic-test --ignore-not-found
+kubectl delete service tls-test httpbin-traffic-test --ignore-not-found
 kubectl delete secret tls-test-certs --ignore-not-found
 kubectl delete configmap tls-test-nginx-config --ignore-not-found
 
@@ -32,7 +30,6 @@ echo "==> Waiting 5 seconds for EndpointSlices to settle..."
 sleep 5
 
 echo "==> Restarting kube-prober to flush old target metrics..."
-# NUR kube-prober neustarten, damit er frische EndpointSlices liest und In-Memory-Metriken leert
 kubectl rollout restart deployment kube-prober 2>/dev/null || true
 
 echo "==> Cleanup complete!"

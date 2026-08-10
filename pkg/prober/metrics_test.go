@@ -30,7 +30,7 @@ func TestRegisterMetrics_Success(t *testing.T) {
 		t.Fatal("expected metric kube_prober_error_category_hint_info to be registered")
 	}
 
-	expectedCategoriesCount := 6
+	expectedCategoriesCount := len(categories)
 	if len(hintFamily.GetMetric()) != expectedCategoriesCount {
 		t.Errorf("expected %d hint metric entries, got %d", expectedCategoriesCount, len(hintFamily.GetMetric()))
 	}
@@ -41,7 +41,6 @@ func TestDeleteTargetMetrics(t *testing.T) {
 
 	// 1. Populate metrics with label values
 	TrafficCounter.WithLabelValues(target).Inc()
-	SaturationGauge.WithLabelValues(target).Set(1)
 	LatencyHistogram.WithLabelValues(target).Observe(0.05)
 	ErrorCounter.WithLabelValues(target, string(CategoryHTTP)).Inc()
 
