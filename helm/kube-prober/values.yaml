@@ -35,14 +35,6 @@ hpa:
   targetCPUUtilizationPercentage: 80
   targetMemoryUtilizationPercentage: 80
 
-# Test targets configuration for alerts and metrics
-http:
-  enabled: false
-  image:
-    repository: mccutchen/go-httpbin
-    tag: "v2.14.0"
-    pullPolicy: IfNotPresent
-
 # TopologySpreadConstraints configuration
 topologySpreadConstraints:
   enabled: true
