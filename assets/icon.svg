@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="primary-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00ADD8"/>
+      <stop offset="100%" stop-color="#326CE5"/>
+    </linearGradient>
+    <linearGradient id="signal-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22c55e"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg-grad)" stroke="#334155" stroke-width="8"/>
+  <circle cx="256" cy="256" r="180" fill="none" stroke="#334155" stroke-width="4" stroke-dasharray="8 8"/>
+  <circle cx="256" cy="256" r="130" fill="none" stroke="#475569" stroke-width="4"/>
+  <circle cx="256" cy="256" r="70" fill="none" stroke="url(#primary-grad)" stroke-width="6" filter="url(#glow)"/>
+  <g stroke="url(#primary-grad)" stroke-width="12" stroke-linecap="round">
+    <line x1="256" y1="46" x2="256" y2="96"/>
+    <line x1="256" y1="416" x2="256" y2="466"/>
+    <line x1="46" y1="256" x2="96" y2="256"/>
+    <line x1="416" y1="256" x2="466" y2="256"/>
+    <line x1="107" y1="107" x2="143" y2="143"/>
+    <line x1="369" y1="369" x2="405" y2="405"/>
+    <line x1="107" y1="405" x2="143" y2="369"/>
+    <line x1="369" y1="107" x2="405" y2="143"/>
+  </g>
+  <circle cx="256" cy="256" r="28" fill="url(#signal-grad)" filter="url(#glow)"/>
+  <line x1="256" y1="256" x2="380" y2="132" stroke="url(#signal-grad)" stroke-width="6" stroke-linecap="round" filter="url(#glow)"/>
+  <circle cx="380" cy="132" r="10" fill="#22c55e" filter="url(#glow)"/>
+</svg>

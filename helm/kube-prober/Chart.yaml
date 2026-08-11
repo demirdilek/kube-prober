@@ -4,3 +4,4 @@ description: Helm chart for the Kube Prober
 type: application
 version: 1.0.0
 appVersion: "1.0.0"
+icon: https://raw.githubusercontent.com/demirdilek/kube-prober/main/assets/pods.png

@@ -36,9 +36,13 @@ help: ## Show this help message
 
 # ---  QUALITY & TESTING ---
 
-lint: ## Run golangci-lint or go vet for code quality
-	@echo "==> Running linter..."
+lint: ## Run Go, ShellCheck, and Helm linters
+	@echo "==> Running Go linter..."
 	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run ./... || go vet ./...
+	@echo "==> Running ShellCheck..."
+	@command -v shellcheck >/dev/null 2>&1 && shellcheck scripts/*.sh scripts/**/*.sh || echo "shellcheck not installed, skipping..."
+	@echo "==> Running Helm lint..."
+	@command -v helm >/dev/null 2>&1 && helm lint helm/kube-prober || echo "helm not installed, skipping..."
 
 test: ## Run unit and integration tests with race detection
 	@echo "==> Running tests with race detector..."
@@ -56,7 +60,7 @@ bootstrap: k3d-up cache-test-images prometheus-install install-argocd apply-gito
 	@echo " kube-prober stack is fully up and running out-of-the-box! "
 	@echo "========================================================="
 
-k3d-up: 
+k3d-up: ## Create local k3d cluster if it doesn't exist 
 	@if k3d cluster list | grep -q "mycluster"; then \
 		echo "Cluster 'mycluster' already exists."; \
 	else \
@@ -76,24 +80,24 @@ cache-test-images:
 	docker pull mccutchen/go-httpbin:v2.14.0
 	k3d image import mccutchen/go-httpbin:v2.14.0 -c mycluster
 
-prometheus-install: 
+prometheus-install: ## Install or upgrade Prometheus stack
 	@./scripts/deploy-prometheus.sh
 
-install-argocd: 
+install-argocd: ## Install Argo CD
 	@echo "==> Installing Argo CD..."
 	kubectl create namespace $(ARGO_NAMESPACE) || true
 	kubectl apply -n $(ARGO_NAMESPACE) --server-side --force-conflicts -f $(ARGOCD_MANIFEST_URL)
 	@echo "==> Waiting for Argo CD components to be ready..."
 	kubectl wait --for=condition=available deployment/argocd-server -n $(ARGO_NAMESPACE) --timeout=300s
 
-apply-gitops: 
+apply-gitops: ## Register kube-prober Application in Argo CD
 	@echo "==> Registering kube-prober Application in Argo CD..."
 	kubectl apply -f deploy/argocd/kube-prober-app.yaml
 
 # --- 3. INNER DEV LOOP (Run frequently during development) ---
 
 
-local-deploy: argocd-local-enable
+local-deploy: argocd-local-enable ## Build local image, import to k3d, and restart deployment
 	@echo "==> Building Docker image locally ($(IMAGE_TAG))..."
 	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) .
 	@echo "==> Importing image into k3d cluster..."
