@@ -7,7 +7,7 @@ export
 
 # Container registry configuration
 IMAGE_REPO := ghcr.io/demirdilek/kube-prober
-IMAGE_TAG := v1.0.0
+IMAGE_TAG := $(shell awk '/^appVersion:/ {print $$2}' helm/kube-prober/Chart.yaml | tr -d '"')
 
 # Helm & Argo CD variables
 RELEASE_NAME := kube-prober
