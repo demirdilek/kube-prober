@@ -15,7 +15,7 @@
 
 ## 📦 Container Image Specs
 
-- **Registry:** `ghcr.io/demirdilek/kube-prober:1.0.0`
+- **Registry:** `ghcr.io/demirdilek/kube-prober:1.0.1`
 - **Base Image:** `scratch` (Minimalist & secure zero-OS runtime)
 - **Architecture:** Multi-Arch (`amd64` / `arm64`)
 
