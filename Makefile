@@ -1,37 +1,44 @@
 -include .env
 export
 
-.PHONY: help lint test test-coverage k3d-up cache-test-images prometheus-install install-argocd apply-gitops bootstrap local-deploy clean k3d-down forward-all stop-forward argocd-pass argocd-set-pass hard-reset test-targets-enable test-targets-disable test-alert-error test-alert-latency test-alert-traffic test-alert-saturation test-alert-tcp test-alert-tls-expiry test-alert-tls-handshake test-alert-grpc test-alert-clean
+.PHONY: $(shell awk -F':' '/^[a-zA-Z0-9_-]+:/ {print $$1}' $(MAKEFILE_LIST))
 
 .DEFAULT_GOAL := help
 
 # Container registry configuration
-IMAGE_REPO=ghcr.io/demirdilek/kube-prober
-IMAGE_TAG=v0.1.0
+IMAGE_REPO := ghcr.io/demirdilek/kube-prober
+IMAGE_TAG := v1.0.0
 
 # Helm & Argo CD variables
-RELEASE_NAME=kube-prober
-CHART_DIR=./helm/kube-prober
-ARGO_APP=kube-prober
-ARGO_NAMESPACE=argocd
-ARGOCD_MANIFEST_URL ?= https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+RELEASE_NAME := kube-prober
+CHART_DIR := ./helm/kube-prober
+ARGO_APP := kube-prober
+ARGO_NAMESPACE := argocd
+ARGOCD_MANIFEST_URL := https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
 help: ## Show this help message
-	@echo "Usage: make [target]"
+	@echo "================================================================================"
+	@echo "  kube-prober - Kubernetes-Native Probing & Observability Engine"
+	@echo "================================================================================"
+	@echo "  Goal:  Event-driven target discovery and multi-protocol health monitoring"
+	@echo "         (HTTP, TCP, TLS, gRPC) exporting 4 Golden Signals to Prometheus."
 	@echo ""
-	@echo "Targets:"
+	@echo "  Usage: make <target>"
+	@echo ""
+	@echo "  Common Workflows:"
+	@echo "    make bootstrap     Spin up local k3d cluster, Prometheus & Argo CD"
+	@echo "    make local-deploy  Build local image, import to k3d, and restart pod"
+	@echo "    make forward-all   Port-forward Argo CD (8080), Prometheus & Grafana"
+	@echo "    make test-alert-*  Inject SRE fault scenarios (e.g. make test-alert-latency)"
+	@echo "================================================================================"
+	@echo ""
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-# --- 1. QUALITY & TESTING ---
+# ---  QUALITY & TESTING ---
 
 lint: ## Run golangci-lint or go vet for code quality
 	@echo "==> Running linter..."
-	@if command -v golangci-lint > /dev/null; then \
-		golangci-lint run ./...; \
-	else \
-		echo "golangci-lint not installed, running go vet..."; \
-		go vet ./...; \
-	fi
+	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run ./... || go vet ./...
 
 test: ## Run unit and integration tests with race detection
 	@echo "==> Running tests with race detector..."
@@ -42,11 +49,11 @@ test-coverage: ## Run tests and generate HTML coverage report
 	go test -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
 
-# --- 2. BOOTSTRAP (Run once for setup) ---
+# ---  BOOTSTRAP (Run once for setup) ---
 
 bootstrap: k3d-up cache-test-images prometheus-install install-argocd apply-gitops ## Setup cluster, cache images, and deploy core infra
 	@echo "========================================================="
-	@echo " Kube Prober stack is fully up and running out-of-the-box! "
+	@echo " kube-prober stack is fully up and running out-of-the-box! "
 	@echo "========================================================="
 
 k3d-up: 
@@ -56,11 +63,18 @@ k3d-up:
 		k3d cluster create mycluster --api-port 6443 -p "80:80@loadbalancer" -p "443:443@loadbalancer" --agents 2; \
 	fi
 
+k3d-down: ## Delete local k3d cluster
+	k3d cluster delete mycluster || true
+
+hard-reset: k3d-down clean bootstrap ## Deep clean cluster and rebuild stack fresh
+
+clean: ## Clean up temporary build files
+	rm -f coverage.out coverage.html .argo.pid .prom.pid .grafana.pid
+
 cache-test-images: 
 	@echo "==> Pulling and caching external test images..."
 	docker pull mccutchen/go-httpbin:v2.14.0
-	docker pull stefanprodan/podinfo:6.6.0
-	k3d image import mccutchen/go-httpbin:v2.14.0 connectrpc/conformance:v6.6.0 -c mycluster
+	k3d image import mccutchen/go-httpbin:v2.14.0 -c mycluster
 
 prometheus-install: 
 	@./scripts/deploy-prometheus.sh
@@ -73,7 +87,7 @@ install-argocd:
 	kubectl wait --for=condition=available deployment/argocd-server -n $(ARGO_NAMESPACE) --timeout=300s
 
 apply-gitops: 
-	@echo "==> Registering Kube Prober Application in Argo CD..."
+	@echo "==> Registering kube-prober Application in Argo CD..."
 	kubectl apply -f deploy/argocd/kube-prober-app.yaml
 
 # --- 3. INNER DEV LOOP (Run frequently during development) ---
@@ -87,9 +101,7 @@ local-deploy: argocd-local-enable
 	@echo "==> Restarting deployment..."
 	kubectl rollout restart deployment kube-prober
 
-
-
-# --- 4. SRE FAULT INJECTION & TESTS ---
+# ---  SRE FAULT INJECTION & TESTS ---
 
 test-targets-enable: ## Scale up test targets to simulate traffic and latency
 	@echo "Enabling test targets (httpbin)..."
@@ -123,10 +135,10 @@ test-alert-tls-handshake: ## Simulate TLS Handshake Failure Alert
 test-alert-grpc: ## Simulate gRPC NOT_SERVING Alert
 	@./scripts/alerts/trigger-grpc.sh
 
-test-alert-clean: ## Clean up all simulated alert targets and reset overrides
+test-alert-clean: ## Clean test alerts
 	@./scripts/alerts/cleanup-all.sh
 
-# --- 5. OBSERVABILITY & UTILITIES ---
+# --- OBSERVABILITY & UTILITIES ---
 
 forward-all: ## Forward Argo CD, Prometheus & Grafana UIs for Mobile/Tailscale
 	@./scripts/forward-all.sh
@@ -159,10 +171,4 @@ argocd-set-pass: ## Set a custom Argo CD admin password
 	kubectl patch secret argocd-secret -n argocd -p "{\"stringData\": {\"admin.password\": \"$$HASH\", \"admin.passwordMtime\": \"$$(date -u +%FT%TZ)\"}}"; \
 	echo "==> Password successfully updated to: $$MYPASS"
 
-clean: ## Clean up temporary build files
-	rm -f coverage.out coverage.html .argo.pid .prom.pid .grafana.pid
 
-k3d-down: ## Delete local k3d cluster
-	k3d cluster delete mycluster || true
-
-hard-reset: k3d-down clean bootstrap ## Deep clean cluster and rebuild stack fresh

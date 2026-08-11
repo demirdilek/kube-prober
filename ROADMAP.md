@@ -73,3 +73,9 @@ This document outlines the planned improvements, architectural refinements, and 
 - [ ] **Skaffold Integration:** Standardize the inner development loop by transitioning from the custom Makefile to Google's Skaffold for hermetic, fast-iterating local Kubernetes deployments.
 - [ ] **SLOs as Code:** Define Service Level Objectives and Error Budgets declaratively using tools like Sloth to automatically generate complex, multi-window burn rate alerts.
 - [ ] **Context-Aware Structured Logging:** Integrate Go's native `slog` with OpenTelemetry to inject Trace IDs into log entries, enabling seamless navigation from a firing alert directly to the failing request.
+
+## Phase 6: Service Mesh Integration & Global Observability**
+
+- [ **] **Service Mesh Evaluation:** Evaluate and test a lightweight service mesh (e.g., Linkerd or Cilium) in the k3d cluster to monitor service-to-service communication.
+- [ ] **Global Mesh Metrics Integration:** Extend `kube-prober` to query central mesh metrics alongside direct endpoint probing for a complete global system overview.
+- [ ] **Unified 4 Golden Signals:** Combine internal application metrics with network-level service mesh telemetry into a single, comprehensive monitoring dashboard.

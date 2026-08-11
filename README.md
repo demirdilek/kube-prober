@@ -11,7 +11,7 @@
 
 ## 📦 Container Image Specs
 
-- **Registry:** `ghcr.io/demirdilek/kube-prober:latest`
+- **Registry:** `ghcr.io/demirdilek/kube-prober:1.0.0`
 - **Base Image:** `scratch` (Minimalist & secure zero-OS runtime)
 - **Architecture:** Multi-Arch (`amd64` / `arm64`)
 
@@ -53,7 +53,7 @@ The `kube-prober` microservice acts as the central observability engine. Using a
    |                                                        |
    +--(HPA / PDB Supervision)-----------------> (Thread-Safe Local Registry)
                                                             |
-                                               (Concurrent HTTP/DNS Probes)
+                                             (Concurrent Multi-Protocol Probes)
                                                             v
                                                    [ Target Services ]
                                                             |
@@ -131,19 +131,19 @@ The `kube-prober` microservice acts as the central observability engine. Using a
 You can manage the local development cluster and the entire stack lifecycle using the provided `Makefile`:
 
 ```bash
-# Spin up the entire stack from scratch (k3d, Docker build, Prometheus, Argo CD, Helm deployment)
-make all
+# Spin up the entire stack from scratch (k3d cluster, images, Prometheus, Argo CD, Helm)
+make bootstrap
 
-# Fast local rebuild, import, pause GitOps auto-sync, and rollout restart for local debugging
+# Fast local rebuild, import, pause GitOps auto-sync, and rollout restart
 make local-deploy
 
-# Pause Argo CD Auto-Sync & Self-Healing for local debugging
-make dev-enable
+# Pause Argo CD Auto-Sync for local debugging
+make argocd-local-enable
 
-# Re-enable Argo CD Auto-Sync & Self-Healing
-make dev-disable
+# Re-enable Argo CD Auto-Sync
+make argocd-local-disable
 
-# Delete local k3d cluster and clean up local artifacts
+# Clean up temporary local build artifacts
 make clean
 
 # Start background port-forwarding for Argo CD (8080), Prometheus (9090), and Grafana (3000)

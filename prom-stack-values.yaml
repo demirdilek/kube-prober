@@ -5,6 +5,10 @@
 
 alertmanager:
   enabled: true
+  alertmanagerSpec:
+    secrets:
+      - alertmanager-webhooks
+
   config:
     global:
       resolve_timeout: 5m
@@ -13,12 +17,12 @@ alertmanager:
     # Routing Tree
     # --------------------------------------------------------------------------
     route:
+      # Default route for all alerts
       receiver: 'slack-notifications'
-      # Bündelt Alerts nach Name, Severity und Kategorie gegen Alert-Storms
       group_by: ['alertname', 'severity', 'category']
       group_wait: 10s
       group_interval: 5m
-      # Anti-Alert-Fatigue: Wiederholt unveränderte Dauer-Alerts erst nach 12h
+      # Repeat alerts every 12 hours
       repeat_interval: 12h
       
       routes:
@@ -27,13 +31,13 @@ alertmanager:
             - alertname = Watchdog
           receiver: 'null'
 
-        # Critical Alerts: Parallel Push-Benachrichtigung an Mobilgeräte
-        - matchers:
-            - severity = critical
-          receiver: 'pushover-notifications'
-          continue: true
+#        # Critical alerts go to Pushover for immediate attention
+#        - matchers:
+#            - severity = critical
+#          receiver: 'pushover-notifications'
+#          continue: true
 
-        # Alle Standard-Alerts landen im zentralen Slack-Channel
+        # All other alerts (info, warning, critical) go to Slack
         - matchers:
             - severity =~ "info|warning|critical"
           receiver: 'slack-notifications'
@@ -49,7 +53,7 @@ alertmanager:
       # ------------------------------------------------------------------------
       - name: 'slack-notifications'
         slack_configs:
-          - api_url: $SLACK_WEBHOOK_URL
+          - api_url_file: /etc/alertmanager/secrets/alertmanager-webhooks/slack-url
             send_resolved: true
             title: '{{ if eq .Status "firing" }}:warning: [{{ .CommonLabels.severity | toUpper }}]{{ else }}:white_check_mark: [RESOLVED]{{ end }} {{ .CommonLabels.alertname }}'
             text: >-
@@ -69,20 +73,20 @@ alertmanager:
       # ------------------------------------------------------------------------
       # Pushover Receiver
       # ------------------------------------------------------------------------
-      - name: 'pushover-notifications'
-        pushover_configs:
-          - user_key: $PUSHOVER_USER_KEY
-            token: $PUSHOVER_API_TOKEN
-            priority: '1' # Umgeht Stummschaltung bei kritischen Systemausfällen
-            sound: 'alien'
-            send_resolved: true
-            title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} ({{ if .CommonLabels.category }}{{ .CommonLabels.category }}{{ else }}system{{ end }})'
-            message: |-
-              {{ range .Alerts }}
-              Summary: {{ .Annotations.summary }}
-              Hint: {{ .Annotations.hint }}
-              ---
-              {{ end }}
+#      - name: 'pushover-notifications'
+#        pushover_configs:
+#          - user_key_file: /etc/alertmanager/secrets/alertmanager-webhooks/pushover-user
+#            token_file: /etc/alertmanager/secrets/alertmanager-webhooks/pushover-token
+#            priority: '1' # Umgeht Stummschaltung bei kritischen Systemausfällen
+#            sound: 'alien'
+#            send_resolved: true
+#            title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} ({{ if .CommonLabels.category }}{{ .CommonLabels.category }}{{ else }}system{{ end }})'
+#            message: |-
+#              {{ range .Alerts }}
+#              Summary: {{ .Annotations.summary }}
+#              Hint: {{ .Annotations.hint }}
+#              ---
+#              {{ end }}
 
 # ------------------------------------------------------------------------------
 # Grafana Configuration (Default Home Dashboard & Provisioning)
@@ -102,14 +106,14 @@ grafana:
       searchNamespace: ALL
 
 # Disable control plane components for k3s/k3d compatibility
-#kubeControllerManager:
-#  enabled: false
+kubeControllerManager:
+  enabled: false
 
-#kubeScheduler:
-#  enabled: false
+kubeScheduler:
+  enabled: false
 
-#kubeProxy:
-#  enabled: false
+kubeProxy:
+  enabled: false
 
-#nodeExporter:
-#  enabled: false
+nodeExporter:
+  enabled: false
