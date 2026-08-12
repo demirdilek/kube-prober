@@ -76,6 +76,6 @@ This document outlines the planned improvements, architectural refinements, and 
 
 ## Phase 6: Service Mesh Integration & Global Observability**
 
-- [ **] **Service Mesh Evaluation:** Evaluate and test a lightweight service mesh (e.g., Linkerd or Cilium) in the k3d cluster to monitor service-to-service communication.
+- [ ] **Service Mesh Evaluation:** Evaluate and test a lightweight service mesh (e.g., Linkerd or Cilium) in the k3d cluster to monitor service-to-service communication.
 - [ ] **Global Mesh Metrics Integration:** Extend `kube-prober` to query central mesh metrics alongside direct endpoint probing for a complete global system overview.
 - [ ] **Unified 4 Golden Signals:** Combine internal application metrics with network-level service mesh telemetry into a single, comprehensive monitoring dashboard.
