@@ -5,7 +5,7 @@
 
 ## Context
 
-When dynamically discovering probe targets, the `Kube Prober` listens to `EndpointSlice` events. However, the protocol routing instructions (custom annotations like `probe/scheme` and `probe/path`) reside on the parent `Service` object, not the `EndpointSlice` itself.
+When dynamically discovering probe targets, the `KubeWatcher` listens to `EndpointSlice` events. However, the protocol routing instructions (custom annotations like `probe/scheme` and `probe/path`) reside on the parent `Service` object, not the `EndpointSlice` itself.
 
 To resolve these routing instructions, the watcher must map the slice's `kubernetes.io/service-name` label back to the original Service. If the application performs a direct live API call (`clientset.CoreV1().Services().Get(...)`) for every single EndpointSlice addition or update, it would bombard the Kubernetes API Server with requests, leading to rate-limiting and control-plane degradation in large clusters.
 

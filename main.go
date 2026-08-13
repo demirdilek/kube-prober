@@ -25,6 +25,10 @@ func init() {
 }
 
 func main() {
+	// Setup graceful shutdown context listening for SIGINT and SIGTERM OS signals
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	// Configure worker pool capacity and HTTP client options for heavy concurrent probing
@@ -69,9 +73,9 @@ func main() {
 	grpcProber := prober.NewGRPCProber(tlsCfg)
 	dispatcher.Register("grpc", grpcProber.ProbeGRPCTarget)
 
-	// Setup graceful shutdown context listening for SIGINT and SIGTERM OS signals
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+	// Register DNS handlers
+	dnsProber := prober.NewDNSProber()
+	dispatcher.Register("dns", dnsProber.ProbeDNSTarget)
 
 	var wg sync.WaitGroup
 	jobs := make(chan prober.Job, jobQueueSize)

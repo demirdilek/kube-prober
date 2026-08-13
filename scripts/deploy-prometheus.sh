@@ -11,11 +11,13 @@ fi
 
 echo "==> Creating Alertmanager Webhook Secret directly from .env..."
 
+# 1. Clean up existing secret to ensure script idempotency
+kubectl delete secret alertmanager-webhooks -n default --ignore-not-found
+
 # 1. Create the secret with the provided values from .env (or empty if not set)
 kubectl create secret generic alertmanager-webhooks -n default \
-  --from-literal=slack-url="${SLACK_WEBHOOK_URL:-}" \
-  --from-literal=pushover-token="${PUSHOVER_API_TOKEN:-}" \
-  --from-literal=pushover-user="${PUSHOVER_USER_KEY:-}" \
+  --from-literal=slack-critical="${SLACK_CRITICAL:-}" \
+  --from-literal=slack-warnings="${SLACK_WARNINGS:-}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # 3. Helm Repo update & install Prometheus stack

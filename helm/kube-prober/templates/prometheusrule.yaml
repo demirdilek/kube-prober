@@ -109,6 +109,17 @@ spec:
             summary: '{{`gRPC Health Check failed on target {{ $labels.target }}`}}'
             hint: "The gRPC service is reachable via TCP, but explicitly reports NOT_SERVING. Check application logs."
 
+        # DNS Resolution Failure (NXDOMAIN, SERVFAIL, timeouts)
+        - alert: DNSResolutionFailed
+          expr: sum(rate(kube_prober_errors_total{category="dns_error"}[2m])) by (target) > 0
+          for: 1m
+          labels:
+            severity: critical
+            app: kube-prober
+          annotations:
+            summary: '{{`DNS resolution failed on target {{ $labels.target }}`}}'
+            hint: "Check CoreDNS, upstream DNS servers, or if the specified domain exists (NXDOMAIN)."
+
     - name: kube-prober-slo-recording-rules
       rules:
         # Availability: Error ratio (1 - success rate)

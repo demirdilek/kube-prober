@@ -9,7 +9,7 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/demirdilek/kube-prober?color=00ADD8&logo=go)](https://github.com/demirdilek/kube-prober)
 [![Image Size](https://img.shields.io/badge/image%20size-29.5%20MB-blue?logo=docker)](https://github.com/demirdilek/kube-prober/pkgs/container/kube-prober)
 
-`kube-prober` is a lightweight Kubernetes-native probing controller written in Go. It dynamically discovers endpoints via Kubernetes `EndpointSlices` using a `SharedInformer` and performs health and performance probes using a concurrency-safe worker pool. Metrics (4 Golden Signals) and lifecycle endpoints are exposed for Prometheus integration.
+`kube-prober` is a zero-coordination-provisioning, cloud-native Kubernetes probing controller written in Go. Built for high-availability environments, it replaces traditional centralized load balancers with stateless Rendezvous Hashing to dynamically shard and distribute health-check targets across active replicas. It executes concurrent, multi-protocol probes (HTTP, TCP, TLS, gRPC,DNS) and natively exports the 4 Golden Signals of SRE directly to Prometheus.
 
 ---
 
@@ -24,8 +24,7 @@
 ## Key Features
 
 - **Event-Driven Target Discovery:** Uses Kubernetes `discoveryv1.EndpointSlice` Informers (filtered by `probe: "true"`) to dynamically discover endpoints without high-overhead API polling.
-- **Multi-Protocol Health Probing:** Native probing handlers for **HTTP/HTTPS**, **TCP**, **TLS** (cert expiry & handshake), and **gRPC** (`grpc.health.v1.Health`). Protocol schemes and custom paths are configurable via Service annotations (`probe/scheme`, `probe/path`).
-- **Multi-Tier SRE Error Classification & Hints:** Categorizes network/protocol failures into distinct SRE buckets (`dns_error`, `tls_error`, `grpc_not_serving`, etc.) and attaches actionable diagnostic hints to metrics and alerts to lower MTTR.
+- **Multi-Protocol Health Probing:** Native probing handlers for **HTTP/HTTPS**, **TCP**, **TLS** (cert expiry & handshake), **gRPC** (`grpc.health.v1.Health`), and **DNS** (domain resolution and record validation). Protocol schemes and custom parameters are dynamically configurable via Service annotations (`probe/scheme`, `probe/path`).
 - **Multi-Channel Alerting (Slack & Pushover):** Pre-configured Alertmanager routing featuring ChatOps audit trails in Slack and high-priority mobile push notifications via Pushover for `critical` incidents.
 - **Distributed Target Sharding (Rendezvous Hashing):** Scales horizontally with Kubernetes HPA by partitioning target endpoints across prober replicas using Highest Random Weight (HRW) hashing, preventing duplicate probes.
 - **SLO / SLI & Burn Rate Alerting:** Computes real-time Availability (99.9%) and Latency SLIs via Prometheus Recording Rules with multi-window burn rate alerts (1h / 5m).
@@ -44,6 +43,16 @@
 
 ---
 
+### Concurrency Model & Worker Pool
+
+The probing engine utilizes a robust **Producer-Consumer architecture** using Go channels to enforce backpressure and bounded resource consumption:
+
+1. **The Scheduler (Producer):** Asynchronously discovers targets and pushes jobs into a central buffered channel (`jobs`).
+2. **The Worker Pool (Consumers):** Concurrently running goroutines continuously pull and execute probes in parallel, capped by the `WORKERS` limit to prevent memory exhaustion.
+3. **Lifecycle Management:** Integrated with `context.Context` and `sync.WaitGroup` to guarantee a graceful drain of in-flight probes during `SIGTERM` events.
+
+---
+
 ## Architecture Overview
 
 The `kube-prober` microservice acts as the central observability engine. Using a Kubernetes Informer, it streams target changes directly from the API server into a local, thread-safe memory registry before executing HTTP/DNS probes and exporting 4 Golden Signals telemetry.
@@ -53,7 +62,7 @@ The `kube-prober` microservice acts as the central observability engine. Using a
                                                   | Cluster Autoscaler |
                                                   +---------+----------+
                                                             |
-[ K8s Control Plane ] --(EndpointSlice Watch Stream)--> [ kube-prober Informer ]
+[ K8s Control Plane ]-(EndpointSlice Watch Stream)-> [ kube-prober Informer ]
    |                                                        |
    +--(HPA / PDB Supervision)-----------------> (Thread-Safe Local Registry)
                                                             |
@@ -203,6 +212,7 @@ The setup allows you to simulate threshold violations for different Golden Signa
 | **TCP Connection Refused** | Targets dead port (Layer 4 failure) | `make test-alert-tcp` |
 | **TLS Cert Expiry / Handshake** | Deploys expiring self-signed certificate | `make test-alert-tls-expiry` |
 | **gRPC Service Failure** | Targets gRPC endpoint without `grpc.health.v1` | `make test-alert-grpc` |
+| **DNS Resolution Failure** | Targets a fake domain to simulate DNS resolution failure[cite: 1] | `make test-alert-dns` |
 
 #### 🧹 Cleanup
 
@@ -222,4 +232,8 @@ make test-alert-clean
 
 ### Roadmap & Production Readiness
 
-Check out our [ROADMAP.md](ROADMAP.md) for planned features, upcoming architectural refinements, and production readiness milestones.
+The project is continually evolving towards enterprise readiness. View the full [ROADMAP.md](ROADMAP.md) for details. Upcoming milestones include:
+
+- **Protocol Expansion**: Further support for DNS resolution checks.
+- **Chaos Engineering Suites**: Automated resilience testing.
+- **Multi-Tenancy & Tenant Isolation**: SaaS-ready architectural boundaries.

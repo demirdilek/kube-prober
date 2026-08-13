@@ -139,6 +139,12 @@ test-alert-tls-handshake: ## Simulate TLS Handshake Failure Alert
 test-alert-grpc: ## Simulate gRPC NOT_SERVING Alert
 	@./scripts/alerts/trigger-grpc.sh
 
+test-alert-dns: ## Simulate DNS Resolution Failure Alert
+	@./scripts/alerts/trigger-dns.sh
+
+test-dns-success: ## Simulate DNS Resolution Success (for testing recovery)
+	@./scripts/alerts/trigger-dns-success.sh
+
 test-alert-clean: ## Clean test alerts
 	@./scripts/alerts/cleanup-all.sh
 
@@ -152,7 +158,7 @@ stop-forward: ## Stop background port-forwarding
 	@rm -f .argo.pid .prom.pid .grafana.pid
 	@echo "Stopped all port-forwards."
 
-argocd-login: ## Login to Argo CD CLI
+argocd-login: forward-all argocd-set-pass ## Login to Argo CD CLI
 	@argocd login localhost:8080 --username admin --insecure
 
 argocd-local-enable: ## Pausing Argo CD auto-sync to avoid ans sync with local changes...
