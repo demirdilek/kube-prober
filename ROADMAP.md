@@ -38,9 +38,9 @@ This document outlines the planned improvements, architectural refinements, and 
   - [X] **TCP:** Layer 4 connectivity & banner checks for databases/caches.
   - [X] **TLS / SSL:** Certificate expiry tracking and handshake validation.
   - [X] **gRPC:** Internal microservices & control plane (`grpc.health.v1.Health`).
-  - [] **DNS:** Resolution time and correctness for critical service lookups.
+  - [X] **DNS:** Resolution time and correctness for critical service lookups.
 - [ ] **SRE Dashboard & Observability Hardening**
-  - [x] Add 4 Golden Signals visualization panels.
+  - [X] Add 4 Golden Signals visualization panels.
   - [X] Add dedicated TLS Certificate Expiry tracking panel (stat/gauge).
   - [X] Add TCP Target Availability & Protocol Error Breakdown panels.
   - [X] Add SLO Error Budget Burn Rate panel based on recording rules.

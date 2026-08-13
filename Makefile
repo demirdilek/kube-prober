@@ -14,7 +14,6 @@ RELEASE_NAME := kube-prober
 CHART_DIR := ./helm/kube-prober
 ARGO_APP := kube-prober
 ARGO_NAMESPACE := argocd
-ARGOCD_MANIFEST_URL := https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
 help: ## Show this help message
 	@echo "================================================================================"
@@ -72,7 +71,7 @@ k3d-down: ## Delete local k3d cluster
 
 hard-reset: k3d-down clean bootstrap ## Deep clean cluster and rebuild stack fresh
 
-clean: ## Clean up temporary build files
+clean: k3d-down ## Clean up temporary build files
 	rm -f coverage.out coverage.html .argo.pid .prom.pid .grafana.pid
 
 cache-test-images: 
@@ -86,9 +85,11 @@ prometheus-install: ## Install or upgrade Prometheus stack
 install-argocd: ## Install Argo CD
 	@echo "==> Installing Argo CD..."
 	kubectl create namespace $(ARGO_NAMESPACE) || true
-	kubectl apply -n $(ARGO_NAMESPACE) --server-side --force-conflicts -f $(ARGOCD_MANIFEST_URL)
+	kubectl apply -n $(ARGO_NAMESPACE) --server-side --force-conflicts -f deploy/argocd/install-v3-5-1.yaml
 	@echo "==> Waiting for Argo CD components to be ready..."
 	kubectl wait --for=condition=available deployment/argocd-server -n $(ARGO_NAMESPACE) --timeout=300s
+	kubectl wait --for=condition=available deployment/argocd-repo-server -n $(ARGO_NAMESPACE) --timeout=300s
+	kubectl wait --for=condition=available deployment/argocd-applicationset-controller -n $(ARGO_NAMESPACE) --timeout=300s
 
 apply-gitops: ## Register kube-prober Application in Argo CD
 	@echo "==> Registering kube-prober Application in Argo CD..."
@@ -148,6 +149,8 @@ test-dns-success: ## Simulate DNS Resolution Success (for testing recovery)
 test-alert-clean: ## Clean test alerts
 	@./scripts/alerts/cleanup-all.sh
 
+test-alert-all: test-targets-enable test-alert-error test-alert-latency test-alert-traffic test-alert-saturation test-alert-tcp test-alert-tls-expiry test-alert-tls-handshake test-alert-grpc test-alert-dns ## Run all alert tests
+
 # --- OBSERVABILITY & UTILITIES ---
 
 forward-all: ## Forward Argo CD, Prometheus & Grafana UIs for Mobile/Tailscale
@@ -174,11 +177,9 @@ argocd-pass: ## Retrieve initial admin password for Argo CD UI
 	@echo "==> Argo CD Initial Admin Password:"
 	@kubectl -n argocd get secret argocd-initialadmin-secret -o jsonpath="{.data.password}" 2>/dev/null | base64 -d || echo "Initial secret deleted." ; echo""
 
-argocd-set-pass: ## Set a custom Argo CD admin password
+argocd-set-pass: ## Set a custom Argo CD admin password using the running pod
 	@MYPASS="admin1234"; \
 	echo "==> Updating Argo CD admin password..."; \
-	HASH=$$(docker run --rm quay.io/argoproj/argocd:latest argocd account bcrypt --password "$$MYPASS"); \
+	HASH=$$(kubectl exec -n argocd deployment/argocd-server -- argocd account bcrypt --password "$$MYPASS"); \
 	kubectl patch secret argocd-secret -n argocd -p "{\"stringData\": {\"admin.password\": \"$$HASH\", \"admin.passwordMtime\": \"$$(date -u +%FT%TZ)\"}}"; \
 	echo "==> Password successfully updated to: $$MYPASS"
-
-

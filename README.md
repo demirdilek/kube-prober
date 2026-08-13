@@ -7,7 +7,7 @@
 [![CI](https://github.com/demirdilek/kube-prober/actions/workflows/ci.yml/badge.svg)](https://github.com/demirdilek/kube-prober/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/demirdilek/kube-prober?color=00ADD8&logo=go)](https://github.com/demirdilek/kube-prober)
-[![Image Size](https://img.shields.io/badge/image%20size-29.5%20MB-blue?logo=docker)](https://github.com/demirdilek/kube-prober/pkgs/container/kube-prober)
+[![Image Size](https://img.shields.io/badge/image%20size-51.8%20MB-blue?logo=docker)](https://github.com/demirdilek/kube-prober/pkgs/container/kube-prober)
 
 `kube-prober` is a zero-coordination-provisioning, cloud-native Kubernetes probing controller written in Go. Built for high-availability environments, it replaces traditional centralized load balancers with stateless Rendezvous Hashing to dynamically shard and distribute health-check targets across active replicas. It executes concurrent, multi-protocol probes (HTTP, TCP, TLS, gRPC,DNS) and natively exports the 4 Golden Signals of SRE directly to Prometheus.
 
