@@ -85,6 +85,7 @@ The `kube-prober` microservice acts as the central observability engine. Using a
                                                  (Slack / Pushover / Pager)
                                                             v
                                                       [ SRE On-Call ]
+```
 
 ---
 
