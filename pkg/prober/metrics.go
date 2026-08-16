@@ -56,6 +56,7 @@ var (
 		},
 		[]string{"category", "hint"},
 	)
+
 	// TLSCertExpiryGauge tracks the remaining days until the TLS certificate expires.
 	TLSCertExpiryGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -66,14 +67,15 @@ var (
 	)
 )
 
-// Populate static category hints directly from ErrorCategory.Hint()
-var categories = []ErrorCategory{
+// List of all active error categories for hint exposure and label cleanup.
+var allCategories = []ErrorCategory{
 	CategoryDNS,
 	CategoryConnectionRefused,
 	CategoryTLS,
 	CategoryTimeout,
 	CategoryHTTP,
 	CategoryGRPCNotServing,
+	CategoryGRPCError,
 	CategoryUnhealthy,
 	CategoryAuth,
 	CategoryUnknown,
@@ -91,7 +93,8 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		TLSCertExpiryGauge,
 	)
 
-	for _, cat := range categories {
+	// Expose static hint metrics for all registered categories
+	for _, cat := range allCategories {
 		CategoryHintInfo.WithLabelValues(string(cat), cat.Hint()).Set(1)
 	}
 }
@@ -103,18 +106,7 @@ func DeleteTargetMetrics(target string) {
 	TLSCertExpiryGauge.DeleteLabelValues(target)
 
 	// Clean up all error categories for this target
-	categories := []ErrorCategory{
-		CategoryDNS,
-		CategoryConnectionRefused,
-		CategoryTLS,
-		CategoryTimeout,
-		CategoryHTTP,
-		CategoryGRPCNotServing,
-		CategoryUnhealthy,
-		CategoryAuth,
-		CategoryUnknown,
-	}
-	for _, cat := range categories {
+	for _, cat := range allCategories {
 		ErrorCounter.DeleteLabelValues(target, string(cat))
 	}
 }

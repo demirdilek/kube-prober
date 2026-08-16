@@ -2,11 +2,15 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ .Release.Name }}-sa
+  labels:
+    {{- include "kube-prober.labels" . | nindent 4 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: {{ .Release.Name }}-service-discovery
+  labels:
+    {{- include "kube-prober.labels" . | nindent 4 }}
 rules:
   # Permissions required for the EndpointSlice Informer
   - apiGroups: ["discovery.k8s.io"]
@@ -16,11 +20,17 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch"]
+  # Permissions required to read StaticTarget Custom Resources (CRD)
+  - apiGroups: ["kube-prober.io"]
+    resources: ["statictargets"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: {{ .Release.Name }}-service-discovery-binding
+  labels:
+    {{- include "kube-prober.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
     name: {{ .Release.Name }}-sa

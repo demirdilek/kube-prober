@@ -5,50 +5,70 @@ import (
 	"testing"
 )
 
-func TestDispatcher(t *testing.T) {
-	dispatcher := NewDispatcher()
+func TestDispatcher_Execute(t *testing.T) {
+	d := NewDispatcher()
 
-	// Mock probe function simulating a successful HTTP execution
-	mockHTTP := func(ctx context.Context, target string) ErrorCategory {
-		return "" // Success
+	// Mock probe functions to simulate different outcomes
+	mockHTTPProber := func(ctx context.Context, target Target) ErrorCategory {
+		return "" // Simulate success
 	}
 
-	// Mock probe function simulating a DNS failure
-	mockDNSFail := func(ctx context.Context, target string) ErrorCategory {
-		return CategoryDNS
+	mockTCPProber := func(ctx context.Context, target Target) ErrorCategory {
+		return CategoryConnectionRefused // Simulate a specific error
 	}
 
-	// Register function pointers
-	dispatcher.Register("http", mockHTTP)
-	dispatcher.Register("dns", mockDNSFail)
+	// Register the mock functions
+	d.Register("http", mockHTTPProber)
+	d.Register("tcp", mockTCPProber)
 
 	tests := []struct {
-		name   string
-		target string
-		want   ErrorCategory
+		name     string
+		target   Target
+		expected ErrorCategory
 	}{
 		{
-			name:   "Registered HTTP Scheme",
-			target: "http://example.com",
-			want:   "",
+			name: "Execute registered HTTP scheme successfully",
+			target: Target{
+				Name:    "test-http",
+				Address: "http://example.com",
+				Scheme:  "http",
+			},
+			expected: "",
 		},
 		{
-			name:   "Registered DNS Scheme",
-			target: "dns://example.com",
-			want:   CategoryDNS,
+			name: "Execute registered TCP scheme with expected error return",
+			target: Target{
+				Name:    "test-tcp",
+				Address: "tcp://127.0.0.1:5432",
+				Scheme:  "tcp",
+			},
+			expected: CategoryConnectionRefused,
 		},
 		{
-			name:   "Unregistered Scheme (gRPC)",
-			target: "grpc://example.com",
-			want:   CategoryUnknown,
+			name: "Execute unknown scheme falls back to CategoryUnknown",
+			target: Target{
+				Name:    "test-unknown",
+				Address: "ftp://example.com",
+				Scheme:  "ftp",
+			},
+			expected: CategoryUnknown,
+		},
+		{
+			name: "Execute empty scheme falls back to CategoryUnknown",
+			target: Target{
+				Name:    "test-empty",
+				Address: "example.com",
+				Scheme:  "",
+			},
+			expected: CategoryUnknown,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := dispatcher.Execute(context.Background(), tt.target)
-			if got != tt.want {
-				t.Errorf("dispatcher.Execute() = %v, want %v", got, tt.want)
+			got := d.Execute(context.Background(), tt.target)
+			if got != tt.expected {
+				t.Errorf("Execute() = %v, want %v", got, tt.expected)
 			}
 		})
 	}

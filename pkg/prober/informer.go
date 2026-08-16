@@ -20,6 +20,7 @@ type KubeWatcher struct {
 	registry  *Registry
 }
 
+// NewKubeWatcher initializes a new KubeWatcher.
 func NewKubeWatcher(clientset kubernetes.Interface, reg *Registry) *KubeWatcher {
 	return &KubeWatcher{
 		clientset: clientset,
@@ -65,6 +66,7 @@ func (w *KubeWatcher) getProbeSchemeAndPath(slice *discoveryv1.EndpointSlice, sv
 	return scheme, path
 }
 
+// Start begins watching EndpointSlices and Services for dynamic target discovery.
 func (w *KubeWatcher) Start(ctx context.Context) error {
 	factory := informers.NewSharedInformerFactoryWithOptions(
 		w.clientset,

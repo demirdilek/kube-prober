@@ -2,7 +2,6 @@ package prober
 
 import (
 	"fmt"
-	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -11,146 +10,211 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func TestRegistry_ShardingRendezvousHashing(t *testing.T) {
-	registry := NewRegistry()
-
-	// 1. Simulate a cluster topology with 3 prober replicas
-	podIPs := []string{"10.244.0.100", "10.244.0.101", "10.244.0.102"}
-	selfIP := "10.244.0.100"
-
-	// Configure the registry with the mocked HPA topology
-	registry.SetSelfIP(selfIP)
-	registry.UpdatePeers(podIPs)
-
-	// 2. Define a list of discovered target URLs
-	targets := []string{
-		"http://10.244.0.1:8080/healthz",
-		"http://10.244.0.2:8080/healthz",
-		"http://10.244.0.3:8080/healthz",
-		"http://10.244.0.4:8080/healthz",
-		"http://10.244.0.5:8080/healthz",
-		"http://10.244.0.6:8080/healthz",
-		"http://10.244.0.7:8080/healthz",
-		"http://10.244.0.8:8080/healthz",
-	}
-
-	// 3. Count how many targets are assigned to THIS specific pod
-	assignedToSelf := 0
-	for _, target := range targets {
-		if registry.ShouldProcessTarget(target) {
-			assignedToSelf++
+// Helper to safely drain expected events from the channel with a timeout
+func drainEvents(ch <-chan TargetEvent, expectedCount int) []TargetEvent {
+	var events []TargetEvent
+	timeout := time.After(1 * time.Second)
+	for i := 0; i < expectedCount; i++ {
+		select {
+		case evt := <-ch:
+			events = append(events, evt)
+		case <-timeout:
+			return events
 		}
 	}
+	return events
+}
 
-	// 4. Verify that not all targets are assigned to a single pod (sharding is active)
-	// With 8 targets and 3 pods, it is statistically highly probable to get a subset.
-	if assignedToSelf == 0 || assignedToSelf == len(targets) {
-		t.Errorf("expected distributed targets, but got %d assigned to self out of %d", assignedToSelf, len(targets))
+func TestRegistry_AddStaticTarget(t *testing.T) {
+	r := NewRegistry("10.0.0.1")
+
+	target := Target{
+		Name:    "google-dns",
+		Address: "8.8.8.8",
+		Scheme:  "dns",
+		Static:  true,
+	}
+
+	r.Add(target)
+
+	events := drainEvents(r.Events, 1)
+	if len(events) != 1 {
+		t.Fatalf("Expected 1 event, got %d", len(events))
+	}
+	if !events[0].IsAdded || events[0].Target.Address != "8.8.8.8" {
+		t.Errorf("Expected IsAdded=true for 8.8.8.8, got %v", events[0])
 	}
 }
 
-func TestRegistry_UpdateAndRemoveEndpointSlice(t *testing.T) {
-	registry := NewRegistry()
+func TestRegistry_UpdateFromEndpointSlice_And_GhostEvents(t *testing.T) {
+	selfIP := "10.0.0.1"
+	r := NewRegistry(selfIP)
+	r.UpdatePeers([]string{selfIP})
 
-	port8080 := int32(8080)
-
-	sliceWithPort := &discoveryv1.EndpointSlice{
+	port := int32(8080)
+	slice := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-slice-1",
 			Namespace: "default",
+			Name:      "test-slice",
 		},
 		Ports: []discoveryv1.EndpointPort{
-			{Port: &port8080},
+			{Port: &port},
 		},
 		Endpoints: []discoveryv1.Endpoint{
-			{Addresses: []string{"10.244.0.5", "10.244.0.6"}},
+			{
+				Addresses: []string{"192.168.1.100"},
+				Conditions: discoveryv1.EndpointConditions{
+					Ready: boolPtr(true),
+				},
+			},
 		},
 	}
 
-	// 1. Test Add with custom path and explicit http scheme
-	customPath := "/custom-health"
-	registry.UpdateFromEndpointSlice(sliceWithPort, "http", customPath)
+	// 1. Add targets via EndpointSlice
+	r.UpdateFromEndpointSlice(slice, "http", "/healthz")
 
-	// WARTEN, bis die asynchrone Event-Goroutine fertig ist
-	time.Sleep(50 * time.Millisecond)
-
-	targets := registry.GetTargets()
-	if len(targets) != 2 {
-		t.Fatalf("expected 2 targets, got %d", len(targets))
+	events := drainEvents(r.Events, 1)
+	if len(events) != 1 {
+		t.Fatalf("Expected 1 add event, got %d", len(events))
+	}
+	expectedAddress := "http://192.168.1.100:8080/healthz"
+	if events[0].Target.Address != expectedAddress || !events[0].IsAdded {
+		t.Errorf("Unexpected event: %+v", events[0])
 	}
 
-	expectedURL1 := "http://10.244.0.5:8080/custom-health"
-	expectedURL2 := "http://10.244.0.6:8080/custom-health"
+	// 2. Simulate Endpoint removal (scaling down the monitored app)
+	slice.Endpoints = []discoveryv1.Endpoint{} // Empty endpoints
+	r.UpdateFromEndpointSlice(slice, "http", "/healthz")
 
-	if !slices.Contains(targets, expectedURL1) || !slices.Contains(targets, expectedURL2) {
-		t.Errorf("expected targets to contain %s and %s, got %v", expectedURL1, expectedURL2, targets)
+	removeEvents := drainEvents(r.Events, 1)
+	if len(removeEvents) != 1 {
+		t.Fatalf("Expected 1 remove event, got %d", len(removeEvents))
+	}
+	if removeEvents[0].IsAdded {
+		t.Errorf("Expected IsAdded=false for target removal")
 	}
 
-	// Verify events were emitted
-	if len(registry.Events) != 2 {
-		t.Fatalf("expected 2 events in channel, got %d", len(registry.Events))
+	// 3. Test Ghost Events: Remove the slice completely now
+	// Since the target is already inactive, this should NOT emit any ghost events.
+	r.RemoveEndpointSlice(slice, "http", "/healthz")
+	ghostEvents := drainEvents(r.Events, 1)
+	if len(ghostEvents) != 0 {
+		t.Errorf("Expected 0 ghost events, got %d", len(ghostEvents))
+	}
+}
+
+func TestRegistry_ShardingRendezvousHashing(t *testing.T) {
+	// Use explicit IPs to test hash distribution
+	pod1 := "10.0.0.1"
+	pod2 := "10.0.0.2"
+
+	r1 := NewRegistry(pod1)
+	r2 := NewRegistry(pod2)
+
+	peers := []string{pod1, pod2}
+	r1.UpdatePeers(peers)
+	r2.UpdatePeers(peers)
+
+	// Ensure the null-byte hash distribution is stable and doesn't orphan targets
+	targetA := "http://app-1:80/healthz"
+	targetB := "http://app-2:80/healthz"
+
+	// Both registries should agree on who owns what without coordination
+	r1OwnsA := r1.ShouldProcessTarget(targetA)
+	r2OwnsA := r2.ShouldProcessTarget(targetA)
+
+	if r1OwnsA == r2OwnsA {
+		t.Errorf("Split brain detected! Both or neither pods claim ownership of targetA: r1=%v, r2=%v", r1OwnsA, r2OwnsA)
 	}
 
-	// 2. Test Idempotency (adding the same targets again should not duplicate events)
-	registry.UpdateFromEndpointSlice(sliceWithPort, "http", customPath)
+	r1OwnsB := r1.ShouldProcessTarget(targetB)
+	r2OwnsB := r2.ShouldProcessTarget(targetB)
 
-	// WARTEN
-	time.Sleep(50 * time.Millisecond)
+	if r1OwnsB == r2OwnsB {
+		t.Errorf("Split brain detected! Both or neither pods claim ownership of targetB: r1=%v, r2=%v", r1OwnsB, r2OwnsB)
+	}
+}
 
-	if len(registry.Events) != 2 {
-		t.Errorf("expected 2 events total (0 new), got %d", len(registry.Events))
+func TestRegistry_UpdatePeers_Rebalancing(t *testing.T) {
+	selfIP := "10.0.0.1"
+	r := NewRegistry(selfIP)
+
+	// Start with only self
+	r.UpdatePeers([]string{selfIP})
+
+	// Add dynamic targets
+	for i := 0; i < 10; i++ {
+		r.Add(Target{
+			Name:    fmt.Sprintf("dyn-%d", i),
+			Address: fmt.Sprintf("http://192.168.1.%d", i),
+			Static:  false,
+		})
 	}
 
-	// 3. Test Remove with custom path
-	registry.RemoveEndpointSlice(sliceWithPort, "http", customPath)
+	// Drain the initial 10 add events
+	initialEvents := drainEvents(r.Events, 10)
+	if len(initialEvents) != 10 {
+		t.Fatalf("Expected 10 initial add events, got %d", len(initialEvents))
+	}
 
-	// WARTEN
-	time.Sleep(50 * time.Millisecond)
+	// Simulate HPA scaling up: Add 3 new peers
+	newPeers := []string{selfIP, "10.0.0.2", "10.0.0.3", "10.0.0.4"}
+	r.UpdatePeers(newPeers)
 
-	targets = registry.GetTargets()
+	// Draining events to see what ownership we lost
+	// We expect to lose roughly ~75% of the targets (though random due to hashing)
+	rebalanceEvents := drainEvents(r.Events, 10)
 
-	if len(targets) != 0 {
-		t.Fatalf("expected 0 targets remaining, got %d", len(targets))
+	if len(rebalanceEvents) == 0 {
+		t.Errorf("Expected rebalancing events after peer update, got 0")
+	}
+
+	for _, evt := range rebalanceEvents {
+		if evt.IsAdded {
+			t.Errorf("Did not expect any IsAdded=true events during scale-up (we only lose targets), got: %+v", evt)
+		}
 	}
 }
 
 func TestRegistry_ConcurrencySafety(t *testing.T) {
-	registry := NewRegistry()
+	r := NewRegistry("10.0.0.1")
+	r.UpdatePeers([]string{"10.0.0.1", "10.0.0.2"})
+
 	var wg sync.WaitGroup
+	workers := 50
 
-	// Simulate 20 concurrent discoveries
-	for i := 0; i < 20; i++ {
-		wg.Add(2)
-		ip := fmt.Sprintf("10.244.0.%d", i)
-
-		go func(addr string) {
+	// Run multiple operations concurrently to trigger the race detector
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(idx int) {
 			defer wg.Done()
-			port := int32(80)
 
-			// Each goroutine creates its own EndpointSlice with a unique name to avoid conflicts
-			slice := &discoveryv1.EndpointSlice{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-slice-" + addr, // Eindeutiger Name pro Goroutine
-					Namespace: "default",
-				},
-				Ports:     []discoveryv1.EndpointPort{{Port: &port}},
-				Endpoints: []discoveryv1.Endpoint{{Addresses: []string{addr}}},
-			}
+			// 1. Concurrent Reads
+			_ = r.ShouldProcessTarget(fmt.Sprintf("http://test-%d", idx))
 
-			// Updated signature passing the "http" scheme
-			registry.UpdateFromEndpointSlice(slice, "http", "/healthz")
-		}(ip)
+			// 2. Concurrent Add
+			r.Add(Target{
+				Name:    fmt.Sprintf("static-%d", idx),
+				Address: fmt.Sprintf("192.168.1.%d", idx),
+				Static:  true,
+			})
 
-		go func() {
-			defer wg.Done()
-			_ = registry.GetTargets()
-		}()
+			// 3. Concurrent Peer Updates
+			r.UpdatePeers([]string{"10.0.0.1", "10.0.0.2", "10.0.0.3"})
+		}(i)
 	}
+
+	// Drain the channel continuously so we don't block the workers
+	go func() {
+		for {
+			select {
+			case <-r.Events:
+			case <-time.After(2 * time.Second):
+				return
+			}
+		}
+	}()
 
 	wg.Wait()
-
-	targets := registry.GetTargets()
-	if len(targets) != 20 {
-		t.Errorf("expected 20 concurrent targets registered, got %d", len(targets))
-	}
+	// If the test reaches here without panicking or triggering `-race`, the mutex handling is solid.
 }

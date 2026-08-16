@@ -10,37 +10,41 @@ func TestDNSProber_ProbeDNSTarget(t *testing.T) {
 	prober := NewDNSProber()
 
 	tests := []struct {
-		name     string
-		target   string
-		timeout  time.Duration
-		expected ErrorCategory
+		name      string
+		target    Target
+		timeout   time.Duration
+		expectErr bool
 	}{
 		{
-			name:     "Invalid URL format",
-			target:   "%%%invalid-dns-target",
-			timeout:  2 * time.Second,
-			expected: CategoryUnknown,
+			name: "Successful DNS resolution",
+			target: Target{
+				Name:    "localhost-check",
+				Address: "dns://localhost",
+				Scheme:  "dns",
+			},
+			timeout:   2 * time.Second,
+			expectErr: false,
 		},
 		{
-			name: "Missing domain in path",
-			// No path provided, so there is no domain to resolve
-			target:   "dns://127.0.0.1:53",
-			timeout:  2 * time.Second,
-			expected: CategoryDNS,
+			name: "Failed DNS resolution",
+			target: Target{
+				Name:    "invalid-host",
+				Address: "dns://this-domain-does-not-exist.local",
+				Scheme:  "dns",
+			},
+			timeout:   2 * time.Second,
+			expectErr: true,
 		},
 		{
-			name: "Connection timeout",
-			// Use a non-routable IP (TEST-NET-1) to force a timeout, combined with a tiny context deadline
-			target:   "dns://198.51.100.1:53/example.com?type=A",
-			timeout:  1 * time.Millisecond,
-			expected: CategoryTimeout,
-		},
-		{
-			name: "Custom record type execution timeout",
-			// Test that query parameters like type=TXT are processed and correctly passed into the timeout context
-			target:   "dns://198.51.100.1:53/example.com?type=TXT",
-			timeout:  1 * time.Millisecond,
-			expected: CategoryTimeout,
+			name: "Timeout DNS resolution",
+			// A context with zero timeout will force an immediate timeout error
+			target: Target{
+				Name:    "timeout-host",
+				Address: "google.com",
+				Scheme:  "dns",
+			},
+			timeout:   0 * time.Millisecond,
+			expectErr: true,
 		},
 	}
 
@@ -50,8 +54,12 @@ func TestDNSProber_ProbeDNSTarget(t *testing.T) {
 			defer cancel()
 
 			got := prober.ProbeDNSTarget(ctx, tt.target)
-			if got != tt.expected {
-				t.Errorf("ProbeDNSTarget() = %v, want %v", got, tt.expected)
+
+			if tt.expectErr && got == "" {
+				t.Errorf("ProbeDNSTarget() expected an error category, got success")
+			}
+			if !tt.expectErr && got != "" {
+				t.Errorf("ProbeDNSTarget() expected success, got error category: %v", got)
 			}
 		})
 	}

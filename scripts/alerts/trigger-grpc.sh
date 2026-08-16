@@ -1,77 +1,68 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "==> [gRPC] Deploying a fake Nginx gRPC server to force a clean 'Unimplemented' error..."
+ACTION="${1:-apply}"
+
+if [ "$ACTION" == "clean" ] || [ "$ACTION" == "delete" ]; then
+    echo "==> [gRPC] Cleaning up simulated gRPC not-serving target..."
+    kubectl delete statictarget grpc-error-test -n default --ignore-not-found
+    sleep 1
+    kubectl delete service grpc-not-serving -n default --ignore-not-found
+    kubectl delete deployment grpc-not-serving -n default --ignore-not-found
+    echo "==> Cleanup complete. Probing stopped."
+    exit 0
+fi
+
+echo "==> [gRPC] Deploying reliable gRPC test server..."
 
 kubectl apply -f - <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: grpc-test-nginx-config
-  namespace: default
-data:
-  default.conf: |
-    server {
-        # Strictly enable HTTP/2 for gRPC compatibility
-        listen 9999 http2;
-        server_name _;
-        
-        location / {
-            # Forge a valid gRPC "Trailers-Only" error response
-            add_header Content-Type "application/grpc" always;
-            add_header grpc-status 12 always; # Code 12 = Unimplemented
-            add_header grpc-message "forced-grpc-error" always;
-            return 204; # 204 No Content ensures empty body
-        }
-    }
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: grpc-test
+  name: grpc-not-serving
   namespace: default
+  labels:
+    app: grpc-not-serving
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: grpc-test
+      app: grpc-not-serving
   template:
     metadata:
       labels:
-        app: grpc-test
+        app: grpc-not-serving
     spec:
       containers:
-      - name: nginx
-        image: nginx:alpine
+      - name: server
+        image: registry.k8s.io/e2e-test-images/agnhost:2.45
+        args: ["grpc-health-checking", "--port", "50051"]
         ports:
-        - containerPort: 9999
-        volumeMounts:
-        - name: config
-          mountPath: /etc/nginx/conf.d
-          readOnly: true
-      volumes:
-      - name: config
-        configMap:
-          name: grpc-test-nginx-config
+        - containerPort: 50051
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: grpc-test
+  name: grpc-not-serving
   namespace: default
-  labels:
-    probe: "true"
-  annotations:
-    probe/scheme: "grpc"
-    probe/path: "Health"
 spec:
-  ports:
-  - port: 50051
-    targetPort: 9999
-    name: grpc
   selector:
-    app: grpc-test
+    app: grpc-not-serving
+  ports:
+  - name: grpc
+    port: 50051
+    targetPort: 50051
+---
+apiVersion: kube-prober.io/v1alpha1
+kind: StaticTarget
+metadata:
+  name: grpc-error-test
+  namespace: default
+spec:
+  address: grpc-not-serving.default.svc.cluster.local:50051/UnregisteredService
+  scheme: grpc
 EOF
 
-echo "==> Target grpc-test deployed. The Nginx server will return a clean gRPC error (Code 12)."
-echo "==> The gRPCServiceNotServing alert will trigger shortly."
+echo "==> Waiting for pod rollout..."
+kubectl rollout status deployment/grpc-not-serving -n default --timeout=60s
+echo "==> Target deployed. gRPC health check will now reach the port and evaluate status."

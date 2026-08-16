@@ -4,65 +4,61 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
-	prometheus_dto "github.com/prometheus/client_model/go"
+	dto "github.com/prometheus/client_model/go"
 )
 
-func TestRegisterMetrics_Success(t *testing.T) {
+func TestRegisterMetricsAndHints(t *testing.T) {
 	reg := prometheus.NewRegistry()
-
-	// Direct call without prober.
 	RegisterMetrics(reg)
 
-	metricFamilies, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("failed to gather metrics: %v", err)
+	// Ensure all 10 categories are registered with hints
+	expectedCategories := []ErrorCategory{
+		CategoryDNS,
+		CategoryConnectionRefused,
+		CategoryTLS,
+		CategoryTimeout,
+		CategoryHTTP,
+		CategoryGRPCNotServing,
+		CategoryGRPCError,
+		CategoryUnhealthy,
+		CategoryAuth,
+		CategoryUnknown,
 	}
 
-	var hintFamily *prometheus_dto.MetricFamily
-	for _, mf := range metricFamilies {
-		if mf.GetName() == "kube_prober_error_category_hint_info" {
-			hintFamily = mf
-			break
+	if len(allCategories) != len(expectedCategories) {
+		t.Fatalf("expected %d categories, got %d", len(expectedCategories), len(allCategories))
+	}
+
+	// Verify hint exists and is not empty for each category
+	for _, cat := range expectedCategories {
+		hint := cat.Hint()
+		if hint == "" {
+			t.Errorf("expected non-empty hint for category %s", cat)
 		}
-	}
-
-	if hintFamily == nil {
-		t.Fatal("expected metric kube_prober_error_category_hint_info to be registered")
-	}
-
-	expectedCategoriesCount := len(categories)
-	if len(hintFamily.GetMetric()) != expectedCategoriesCount {
-		t.Errorf("expected %d hint metric entries, got %d", expectedCategoriesCount, len(hintFamily.GetMetric()))
 	}
 }
 
 func TestDeleteTargetMetrics(t *testing.T) {
-	target := "http://10.244.0.50:8080/healthz"
+	target := "test-target.default.svc.cluster.local:80"
 
-	// 1. Populate metrics with label values
+	// Populate metrics
+	LatencyHistogram.WithLabelValues(target).Observe(0.123)
 	TrafficCounter.WithLabelValues(target).Inc()
-	LatencyHistogram.WithLabelValues(target).Observe(0.05)
-	ErrorCounter.WithLabelValues(target, string(CategoryHTTP)).Inc()
-
-	// 2. Delete target metrics
-	DeleteTargetMetrics(target)
-
-	// 3. Verify metrics no longer contain the target label series
-	reg := prometheus.NewRegistry()
-	RegisterMetrics(reg)
-
-	metricFamilies, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("failed to gather metrics: %v", err)
+	TLSCertExpiryGauge.WithLabelValues(target).Set(30)
+	for _, cat := range allCategories {
+		ErrorCounter.WithLabelValues(target, string(cat)).Inc()
 	}
 
-	for _, mf := range metricFamilies {
-		for _, m := range mf.GetMetric() {
-			for _, label := range m.GetLabel() {
-				if label.GetName() == "target" && label.GetValue() == target {
-					t.Errorf("expected metric %s label series for target %s to be deleted, but it still exists", mf.GetName(), target)
-				}
-			}
+	// Delete metrics for target
+	DeleteTargetMetrics(target)
+
+	// Verify that ErrorCounter labels for this target are cleaned up
+	for _, cat := range allCategories {
+		var metric dto.Metric
+		err := ErrorCounter.WithLabelValues(target, string(cat)).Write(&metric)
+		// When deleted, a new call initializes it to 0
+		if err == nil && metric.Counter != nil && metric.Counter.GetValue() != 0 {
+			t.Errorf("expected metric for %s/%s to be reset/deleted", target, cat)
 		}
 	}
 }

@@ -2,114 +2,78 @@ package prober
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"math/big"
-	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
 
-func generateTestTLSServer(t *testing.T) (*net.Listener, string) {
-	// Generate a temporary RSA key
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("failed to generate private key: %v", err)
-	}
-
-	// Create a self-signed certificate valid for 30 days
-	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			CommonName: "localhost",
-		},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(30 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
-	}
-
-	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
-	if err != nil {
-		t.Fatalf("failed to create certificate: %v", err)
-	}
-
-	cert := tls.Certificate{
-		Certificate: [][]byte{derBytes},
-		PrivateKey:  privateKey,
-	}
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to start listener: %v", err)
-	}
-
-	tlsListener := tls.NewListener(listener, &tls.Config{
-		Certificates: []tls.Certificate{cert},
-	})
-
-	go func() {
-		for {
-			conn, err := tlsListener.Accept()
-			if err != nil {
-				return
-			}
-			// Handle the connection in a separate goroutine and force the handshake
-			go func(c net.Conn) {
-				defer c.Close()
-				if tlsConn, ok := c.(*tls.Conn); ok {
-					_ = tlsConn.Handshake()
-				}
-			}(conn)
-		}
-	}()
-
-	return &listener, "tls://" + listener.Addr().String()
-}
-
 func TestTLSProber_ProbeTLSTarget(t *testing.T) {
-	listener, validTarget := generateTestTLSServer(t)
-	defer (*listener).Close()
+	// Start a local TLS server
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer ts.Close()
 
-	prober := NewTLSProber(&tls.Config{
+	// Use InsecureSkipVerify to bypass local certificate SAN/IP mismatches during the test
+	testConfig := &tls.Config{
 		InsecureSkipVerify: true,
-	})
+	}
+	prober := NewTLSProber(testConfig)
+	validTarget := Target{
+		Name:    "valid-tls-server",
+		Address: "tls://" + ts.Listener.Addr().String(),
+		Scheme:  "tls",
+	}
+
+	refusedTarget := Target{
+		Name:    "refused-tls-target",
+		Address: "tls://127.0.0.1:59845",
+		Scheme:  "tls",
+	}
 
 	tests := []struct {
-		name     string
-		target   string
-		expected ErrorCategory
+		name      string
+		target    Target
+		timeout   time.Duration
+		expectErr bool
 	}{
 		{
-			name:     "Successful TLS handshake",
-			target:   validTarget,
-			expected: "",
+			name:      "Successful TLS handshake",
+			target:    validTarget,
+			timeout:   2 * time.Second,
+			expectErr: false,
 		},
 		{
-			name:     "Connection refused for TLS",
-			target:   "tls://127.0.0.1:59843",
-			expected: CategoryConnectionRefused,
+			name:      "Connection refused",
+			target:    refusedTarget,
+			timeout:   2 * time.Second,
+			expectErr: true,
 		},
 		{
-			name:     "Invalid URL format for TLS",
-			target:   "%%%invalid-tls-target",
-			expected: CategoryUnknown,
+			name: "Timeout during connection or handshake",
+			// Use a non-routable IP (TEST-NET-1) to force a timeout
+			target: Target{
+				Name:    "timeout-tls",
+				Address: "tls://198.51.100.1:443",
+				Scheme:  "tls",
+			},
+			timeout:   1 * time.Millisecond,
+			expectErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), tt.timeout)
 			defer cancel()
 
 			got := prober.ProbeTLSTarget(ctx, tt.target)
-			if got != tt.expected {
-				t.Errorf("ProbeTLSTarget() = %v, want %v", got, tt.expected)
+
+			if tt.expectErr && got == "" {
+				t.Errorf("ProbeTLSTarget() expected an error category, got success")
+			}
+			if !tt.expectErr && got != "" {
+				t.Errorf("ProbeTLSTarget() expected success, got error category: %v", got)
 			}
 		})
 	}

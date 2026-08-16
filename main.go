@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 
 	"github.com/demirdilek/kube-prober/pkg/env"
 	"github.com/demirdilek/kube-prober/pkg/kube"
@@ -48,9 +50,13 @@ func main() {
 		},
 	}
 
-	// Register HTTP handlers
-	httpProber := prober.NewHTTPProber(httpClient)
+	// Initialize the Dispatcher
 	dispatcher := prober.NewDispatcher()
+
+	// Register HTTP handlers
+	// Note: Ensure your `NewHTTPProber` function signature in http.go accepts `*http.Client`
+	// so it can use this highly-tuned client!
+	httpProber := prober.NewHTTPProber(httpClient)
 	dispatcher.Register("http", httpProber.ProbeHTTPTarget)
 	dispatcher.Register("https", httpProber.ProbeHTTPTarget)
 
@@ -70,7 +76,8 @@ func main() {
 	dispatcher.Register("tls", tlsProber.ProbeTLSTarget)
 
 	// Register gRPC handlers
-	grpcProber := prober.NewGRPCProber(tlsCfg)
+	// (Using the modernized NewGRPCProber we built that defaults to insecure credentials)
+	grpcProber := prober.NewGRPCProber()
 	dispatcher.Register("grpc", grpcProber.ProbeGRPCTarget)
 
 	// Register DNS handlers
@@ -91,12 +98,23 @@ func main() {
 		slog.Error("Initialization failed", "error", err)
 		os.Exit(1)
 	}
-	registry := prober.NewRegistry()
 
-	// Retrieve local pod IP via Downward API for Rendezvous Hashing target ownership calculations
 	selfIP := os.Getenv("POD_IP")
-	if selfIP != "" {
-		registry.SetSelfIP(selfIP)
+
+	// 3. Initialize your registry
+	registry := prober.NewRegistry(selfIP)
+
+	config, _ := rest.InClusterConfig()
+	dynClient, err := dynamic.NewForConfig(config)
+	if err != nil || dynClient == nil {
+		slog.Error("Failed to create dynamic client, StaticTargets disabled", "error", err)
+	} else {
+		// Start CRD Watcher Informer in background nur wenn dynClient gültig ist
+		go func() {
+			if err := prober.WatchStaticTargets(ctx, dynClient, registry); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("StaticTargets informer stopped", "error", err)
+			}
+		}()
 	}
 
 	// Initialize the unified KubeWatcher for both peer topology and target discovery
@@ -121,45 +139,71 @@ func main() {
 			select {
 			case <-ctx.Done():
 				return
-			case evt := <-registry.Events:
-				schedMu.Lock()
-
-				if evt.IsAdded {
-					// Target assigned to this replica: start local periodic probe scheduler
-					if _, exists := activeSchedulers[evt.Target]; !exists {
-						slog.Info("New target discovered", "target", evt.Target)
-						schedCtx, schedCancel := context.WithCancel(ctx)
-						activeSchedulers[evt.Target] = schedCancel
-
-						wg.Add(1)
-						go prober.TargetScheduler(schedCtx, evt.Target, jobs, probeInterval, &wg)
-					}
-				} else {
-					// Target revoked or deleted: cancel local scheduler and purge metrics
-					if cancelFunc, exists := activeSchedulers[evt.Target]; exists {
-						slog.Info("Target removed", "target", evt.Target)
-						cancelFunc()
-						delete(activeSchedulers, evt.Target)
-						// Clean up all metrics associated with the removed target
-						go func(t string) {
-							time.Sleep(6 * time.Second) // 1s grace period to allow in-flight probes to finish
-							prober.DeleteTargetMetrics(t)
-						}(evt.Target)
-					}
+			case evt, ok := <-registry.Events:
+				if !ok {
+					return
 				}
-				schedMu.Unlock()
+
+				func() {
+					schedMu.Lock()
+					defer schedMu.Unlock()
+
+					if evt.IsAdded {
+						// Target assigned to this replica: start local periodic probe scheduler
+						if _, exists := activeSchedulers[evt.Target.Address]; !exists {
+							slog.Info("New target discovered", "target", evt.Target.Address, "scheme", evt.Target.Scheme)
+							schedCtx, schedCancel := context.WithCancel(ctx)
+							activeSchedulers[evt.Target.Address] = schedCancel
+
+							wg.Add(1)
+							go prober.TargetScheduler(schedCtx, evt.Target, jobs, probeInterval, &wg)
+						}
+					} else {
+						// Target revoked or deleted: cancel local scheduler and purge metrics
+						if cancelFunc, exists := activeSchedulers[evt.Target.Address]; exists {
+							slog.Info("Target removed", "target", evt.Target.Address)
+							cancelFunc()
+							delete(activeSchedulers, evt.Target.Address)
+
+							// Clean up all metrics associated with the removed target safely
+							go func(targetAddr string) {
+								// Wait for Prometheus to scrape the final state
+								time.Sleep(6 * time.Second)
+
+								// Lock the scheduler mutex to safely check the map
+								schedMu.Lock()
+								_, reAdded := activeSchedulers[targetAddr]
+								schedMu.Unlock()
+
+								// Only delete metrics if the target hasn't been re-added in the meantime
+								if !reAdded {
+									prober.DeleteTargetMetrics(targetAddr)
+									slog.Debug("Metrics purged for removed target", "target", targetAddr)
+								}
+							}(evt.Target.Address)
+						}
+					}
+				}()
 			}
 		}
 	}()
 
-	// Start telemetry & health probe server (/metrics, /healthz, /readyz, /debug/pprof)
+	// Start the HTTP server to expose metrics and health endpoints
 	srv := server.New(":8080")
 	go srv.Start()
 
+	// Wait for shutdown signal
 	<-ctx.Done()
 	slog.Info("Shutting down cleanly...")
 
-	// Allow up to 5 seconds for active HTTP probes and goroutines to finish gracefully
+	// 1. Cancel all active schedulers to stop periodic probing
+	schedMu.Lock()
+	for _, cancelFn := range activeSchedulers {
+		cancelFn()
+	}
+	schedMu.Unlock()
+
+	// 2. Close the job queue to signal workers to exit
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 

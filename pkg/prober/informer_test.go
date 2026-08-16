@@ -2,161 +2,168 @@ package prober
 
 import (
 	"context"
-	"slices"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/client-go/tools/cache"
 )
 
+// boolPtr is a helper to get a pointer to a boolean
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+// int32Ptr is a helper to get a pointer to an int32
+func int32Ptr(i int32) *int32 {
+	return &i
+}
+
+// TestKubeWatcher_InformerEvents_DynamicPath tests if the informer correctly
+// reads custom schemes and paths from the Service annotations.
 func TestKubeWatcher_InformerEvents_DynamicPath(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	clientset := fake.NewSimpleClientset()
-	registry := NewRegistry()
-
-	// 1. Create a fake service with a custom probe/path annotation
-	svc := &corev1.Service{
+	// 1. Create a fake clientset and pre-load the Service so it's in the cache
+	testService := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-service",
 			Namespace: "default",
 			Annotations: map[string]string{
-				"probe/path": "/custom-metrics",
+				"probe/scheme": "tcp",
+				"probe/path":   "", // TCP doesn't need a path
 			},
 		},
 	}
-	_, err := clientset.CoreV1().Services("default").Create(ctx, svc, metav1.CreateOptions{})
-	if err != nil {
-		t.Fatalf("failed to create fake service: %v", err)
-	}
+	clientset := fake.NewSimpleClientset(testService)
 
+	// 2. Initialize Registry and Watcher
+	registry := NewRegistry("10.0.0.1")
+	registry.UpdatePeers([]string{"10.0.0.1"}) // Make this pod the owner
 	watcher := NewKubeWatcher(clientset, registry)
 
-	informerFactory := informers.NewSharedInformerFactory(clientset, 0)
-	endpointSliceInformer := informerFactory.Discovery().V1().EndpointSlices()
-
-	// NEW: Instantiate the Service informer and lister for the test
-	serviceInformer := informerFactory.Core().V1().Services()
-	serviceLister := serviceInformer.Lister()
-
-	_, err = endpointSliceInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			if slice, ok := obj.(*discoveryv1.EndpointSlice); ok {
-				// Parse both scheme and path using the new ServiceLister
-				scheme, path := watcher.getProbeSchemeAndPath(slice, serviceLister)
-				registry.UpdateFromEndpointSlice(slice, scheme, path)
-			}
-		},
-	})
+	// 3. Start the watcher and wait for caches to sync
+	err := watcher.Start(ctx)
 	if err != nil {
-		t.Fatalf("failed to add event handler to informer: %v", err)
+		t.Fatalf("failed to start watcher: %v", err)
 	}
 
-	informerFactory.Start(ctx.Done())
-
-	// NEW: Wait for BOTH caches to sync (EndpointSlices and Services)
-	if !cache.WaitForCacheSync(ctx.Done(), endpointSliceInformer.Informer().HasSynced, serviceInformer.Informer().HasSynced) {
-		t.Fatal("timed out waiting for informer caches to sync")
-	}
-
-	// 2. Create an EndpointSlice pointing to the service
-	port8080 := int32(8080)
+	// 4. Create the EndpointSlice dynamically
 	slice := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-slice",
 			Namespace: "default",
 			Labels: map[string]string{
-				"kubernetes.io/service-name": "test-service",
+				"kubernetes.io/service-name": testService.Name,
 				"probe":                      "true",
 			},
 		},
 		Ports: []discoveryv1.EndpointPort{
-			{Port: &port8080},
+			{Port: int32Ptr(6379)},
 		},
 		Endpoints: []discoveryv1.Endpoint{
-			{Addresses: []string{"10.244.0.15"}},
+			{
+				Addresses: []string{"10.244.0.15"},
+				Conditions: discoveryv1.EndpointConditions{
+					Ready: boolPtr(true),
+				},
+			},
 		},
 	}
 
 	_, err = clientset.DiscoveryV1().EndpointSlices("default").Create(ctx, slice, metav1.CreateOptions{})
 	if err != nil {
-		t.Fatalf("failed to create fake endpoint slice: %v", err)
+		t.Fatalf("failed to create endpoint slice: %v", err)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
-	targets := registry.GetTargets()
-	if len(targets) != 1 {
-		t.Fatalf("expected 1 target discovered via informer, got %d", len(targets))
+	// 5. Verify the target was added with the correct dynamic scheme and path
+	select {
+	case evt := <-registry.Events:
+		if !evt.IsAdded {
+			t.Errorf("Expected IsAdded=true, got false")
+		}
+		expectedAddress := "tcp://10.244.0.15:6379"
+		if evt.Target.Address != expectedAddress {
+			t.Errorf("Expected address %q, got %q", expectedAddress, evt.Target.Address)
+		}
+		if evt.Target.Scheme != "tcp" {
+			t.Errorf("Expected scheme 'tcp', got %q", evt.Target.Scheme)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for target to be added to registry")
 	}
 
-	// 3. Verify that the path was DYNAMICALLY extracted from the annotation
-	expectedURL := "http://10.244.0.15:8080/custom-metrics"
-	if !slices.Contains(targets, expectedURL) {
-		t.Errorf("expected target %s to be registered dynamically, got %v", expectedURL, targets)
+	// 6. Test removal by stripping the "probe" label
+	slice.Labels["probe"] = "false"
+	_, err = clientset.DiscoveryV1().EndpointSlices("default").Update(ctx, slice, metav1.UpdateOptions{})
+	if err != nil {
+		t.Fatalf("failed to update endpoint slice: %v", err)
+	}
+
+	select {
+	case evt := <-registry.Events:
+		if evt.IsAdded {
+			t.Errorf("Expected IsAdded=false for target removal, got true")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for target to be removed from registry")
 	}
 }
 
+// TestKubeWatcher_WatchPeers tests if the watcher successfully discovers
+// and registers the IP addresses of the prober pods themselves.
 func TestKubeWatcher_WatchPeers(t *testing.T) {
-	// 1. Set up a cancellable context
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// 2. Initialize the fake clientset and registry
-	fakeClientset := fake.NewSimpleClientset()
-	reg := NewRegistry()
-	reg.SetSelfIP("10.244.0.100") // Simulate our local pod IP
+	clientset := fake.NewSimpleClientset()
+	registry := NewRegistry("10.0.0.1")
+	watcher := NewKubeWatcher(clientset, registry)
 
-	// 3. Start the peer watcher asynchronously using KubeWatcher
-	watcher := NewKubeWatcher(fakeClientset, reg)
-	go watcher.WatchPeers(ctx)
+	// Pre-add a mock dynamic target to see if peer updates trigger a rebalance event
+	registry.targets["http://app:80"] = Target{Address: "http://app:80", Static: false}
+	registry.active["http://app:80"] = true
 
-	// Allow the shared informer a brief moment to start and sync its cache
-	time.Sleep(100 * time.Millisecond)
-
-	// 4. Simulate HPA scaling: Dynamically create a new EndpointSlice
-	ready := true
-	mockSlice := &discoveryv1.EndpointSlice{
+	// Create an EndpointSlice representing the kube-prober pods
+	proberSlice := &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kube-prober-slice-1",
-			Namespace: "default",
+			Name:      "kube-prober-slice",
+			Namespace: "kube-system",
 			Labels: map[string]string{
 				"kubernetes.io/service-name": "kube-prober",
 			},
 		},
 		Endpoints: []discoveryv1.Endpoint{
 			{
-				Addresses: []string{"10.244.0.100", "10.244.0.101"},
+				Addresses: []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"},
 				Conditions: discoveryv1.EndpointConditions{
-					Ready: &ready,
+					Ready: boolPtr(true),
 				},
 			},
 		},
 	}
 
-	// Inject the slice into the fake cluster
-	_, err := fakeClientset.DiscoveryV1().EndpointSlices("default").Create(ctx, mockSlice, metav1.CreateOptions{})
+	_, err := clientset.DiscoveryV1().EndpointSlices("kube-system").Create(ctx, proberSlice, metav1.CreateOptions{})
 	if err != nil {
-		t.Fatalf("Failed to create mock EndpointSlice: %v", err)
+		t.Fatalf("failed to create prober endpoint slice: %v", err)
 	}
 
-	// 5. Allow the informer time to process the event
-	time.Sleep(200 * time.Millisecond)
+	// Start watching peers
+	go watcher.WatchPeers(ctx)
 
-	// 6. Assertions (Verify the state actually changed)
-	peers := reg.GetPeers()
-	if len(peers) != 2 {
-		t.Errorf("Expected 2 peers in the registry, but got %d", len(peers))
-	}
-
-	// Because IPs are sorted by the registry, 10.244.0.100 will always be at index 0
-	if peers[0] != "10.244.0.100" || peers[1] != "10.244.0.101" {
-		t.Errorf("Unexpected peer sorting or IPs: %v", peers)
+	// Wait for the rebalance event triggered by the peer update
+	// Since we added 3 peers and 1 target, ownership will shift. We expect an event.
+	select {
+	case evt := <-registry.Events:
+		// We expect either an IsAdded=true or false depending on the hash,
+		// but receiving ANY event proves the WatchPeers callback fired UpdatePeers.
+		if evt.Target.Address != "http://app:80" {
+			t.Errorf("Expected event for http://app:80, got %q", evt.Target.Address)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for WatchPeers to trigger an UpdatePeers rebalance event")
 	}
 }

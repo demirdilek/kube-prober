@@ -15,24 +15,29 @@ if [ -z "$GRAFANA_PASS" ]; then
 fi
 
 echo "========================================================"
-echo " CONTROL PLANE WEB UIs (Tailscale / Mobile Access)"
+echo " CONTROL PLANE & TELEMETRY (Tailscale / Local Access)"
 echo "========================================================"
-echo " ARGO CD:    https://${TAILSCALE_IP}:8080"
-echo "   User:     admin"
-echo "   Password: ${ARGO_PASS}"
+echo " ARGO CD:     https://${TAILSCALE_IP}:8080"
+echo "   User:      admin"
+echo "   Password:  ${ARGO_PASS}"
 echo " "
 echo "--------------------------------------------------------"
-echo " PROMETHEUS: http://${TAILSCALE_IP}:9090"
+echo " PROMETHEUS:  http://${TAILSCALE_IP}:9090"
 echo "--------------------------------------------------------"
-echo " GRAFANA:    http://${TAILSCALE_IP}:3000"
-echo "   User:     admin"
-echo "   Password: ${GRAFANA_PASS}"
+echo " GRAFANA:     http://${TAILSCALE_IP}:3000"
+echo "   User:      admin"
+echo "   Password:  ${GRAFANA_PASS}"
 echo " "
+echo "--------------------------------------------------------"
+echo " KUBE-PROBER: http://${TAILSCALE_IP}:8081/metrics"
+echo "              http://${TAILSCALE_IP}:8081/healthz"
+echo "              http://${TAILSCALE_IP}:8081/readyz"
 echo "========================================================"
 echo "==> Starting Port-Forwards in background..."
 
 kubectl port-forward --address 0.0.0.0 -n argocd svc/argocd-server 8080:443 >/dev/null 2>&1 & echo $! > .argo.pid
 kubectl port-forward --address 0.0.0.0 -n default svc/prom-stack-kube-prometheus-prometheus 9090:9090 >/dev/null 2>&1 & echo $! > .prom.pid
 kubectl port-forward --address 0.0.0.0 -n default svc/prom-stack-grafana 3000:80 >/dev/null 2>&1 & echo $! > .grafana.pid
+kubectl port-forward --address 0.0.0.0 -n default svc/kube-prober 8081:8080 >/dev/null 2>&1 & echo $! > .prober.pid
 
-echo "==> Done! All 3 UIs are accessible via Tailscale."
+echo "==> Done! All services are forwarded."

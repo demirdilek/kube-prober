@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/url"
+	"strings"
 )
 
 // TCPProber executes raw TCP connection checks.
@@ -15,23 +16,26 @@ func NewTCPProber() *TCPProber {
 }
 
 // ProbeTCPTarget attempts to establish a TCP connection to the target.
-// It expects the target to have a scheme (e.g., tcp://10.0.0.1:5432).
-func (p *TCPProber) ProbeTCPTarget(ctx context.Context, target string) ErrorCategory {
-	parsedURL, err := url.Parse(target)
+func (p *TCPProber) ProbeTCPTarget(ctx context.Context, target Target) ErrorCategory {
+	// Fail fast on completely malformed strings to satisfy the test logic
+	parsedURL, err := url.Parse(target.Address)
 	if err != nil {
 		return CategoryUnknown
 	}
 
+	host := target.Address
+	if parsedURL.Host != "" {
+		host = parsedURL.Host
+	} else if strings.HasPrefix(target.Address, "tcp://") {
+		host = strings.TrimPrefix(target.Address, "tcp://")
+	}
+
 	var dialer net.Dialer
-	
-	// DialContext automatically respects the timeout defined in the provided context
-	conn, err := dialer.DialContext(ctx, "tcp", parsedURL.Host)
+	conn, err := dialer.DialContext(ctx, "tcp", host)
 	if err != nil {
 		return MapToCategory(err, 0)
 	}
 
-	// Close connection immediately after a successful TCP handshake
 	_ = conn.Close()
-
 	return ""
 }

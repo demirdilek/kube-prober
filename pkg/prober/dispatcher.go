@@ -7,7 +7,7 @@ import (
 )
 
 // ProbeFunc defines the function pointer signature for any protocol prober.
-type ProbeFunc func(ctx context.Context, target string) ErrorCategory
+type ProbeFunc func(ctx context.Context, target Target) ErrorCategory
 
 // Dispatcher manages protocol handlers via function pointers
 type Dispatcher struct {
@@ -29,19 +29,24 @@ func (d *Dispatcher) Register(scheme string, fn ProbeFunc) {
 	d.probers[scheme] = fn
 }
 
-// Execute resolves the scheme from the target URL and runs the corresponding ProbeFunc
-func (d *Dispatcher) Execute(ctx context.Context, target string) ErrorCategory {
-	parsedURL, err := url.Parse(target)
-	if err != nil {
-		return CategoryUnknown
-	}
-
+// Execute resolves the scheme from the target struct and runs the corresponding ProbeFunc
+func (d *Dispatcher) Execute(ctx context.Context, target Target) ErrorCategory {
 	d.mu.RLock()
-	fn, exists := d.probers[parsedURL.Scheme]
+	fn, exists := d.probers[target.Scheme]
 	d.mu.RUnlock()
 
 	if !exists {
-		return CategoryUnknown
+		// Fallback: If the scheme wasn't set, try to parse it from the address
+		parsedURL, err := url.Parse(target.Address)
+		if err == nil && parsedURL.Scheme != "" {
+			d.mu.RLock()
+			fn, exists = d.probers[parsedURL.Scheme]
+			d.mu.RUnlock()
+		}
+
+		if !exists {
+			return CategoryUnknown
+		}
 	}
 
 	// Direct execution via function pointer

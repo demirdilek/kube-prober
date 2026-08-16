@@ -5,63 +5,91 @@ import (
 	"sync"
 	"testing"
 	"time"
-	"slices"
 )
 
-func TestContains(t *testing.T) {
-	slice := []string{"http://service-a", "http://service-b"}
-
-	if !slices.Contains(slice, "http://service-a") {
-		t.Errorf("expected slice to contain http://service-a")
-	}
-
-	if slices.Contains(slice, "http://service-c") {
-		t.Errorf("did not expect slice to contain http://service-c")
-	}
-}
-
-func TestWorkerPool_Execution(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+func TestTargetScheduler(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	jobs := make(chan Job, 5)
-	dispatcher := NewDispatcher()
-
-	dispatcher.Register("http", func(ctx context.Context, target string) ErrorCategory {
-		return ""
-	})
-
 	var wg sync.WaitGroup
+
+	target := Target{
+		Name:    "scheduler-test",
+		Address: "http://localhost:8080",
+		Scheme:  "http",
+	}
+
 	wg.Add(1)
-	go WorkerPool(ctx, jobs, dispatcher, &wg)
+	// Run scheduler with a very short interval for fast testing
+	go TargetScheduler(ctx, target, jobs, 10*time.Millisecond, &wg)
 
-	jobs <- Job{Target: "http://example.com"}
-	close(jobs)
+	// Wait for the initial immediate job
+	select {
+	case job := <-jobs:
+		if job.Target.Address != target.Address {
+			t.Errorf("Expected job target address %s, got %s", target.Address, job.Target.Address)
+		}
+		if job.Target.Scheme != target.Scheme {
+			t.Errorf("Expected job target scheme %s, got %s", target.Scheme, job.Target.Scheme)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("Timed out waiting for initial job from scheduler")
+	}
 
+	// Wait for at least one ticker-based job
+	select {
+	case <-jobs:
+		// Success
+	case <-time.After(1 * time.Second):
+		t.Fatal("Timed out waiting for ticker job from scheduler")
+	}
+
+	// Cleanup
+	cancel()
 	wg.Wait()
 }
 
-func TestTargetScheduler_Cancellation(t *testing.T) {
+func TestWorkerPool(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	jobs := make(chan Job, 10)
+	defer cancel()
 
+	d := NewDispatcher()
+
+	// Use a channel to track if our mock prober was executed by the worker
+	called := make(chan Target, 1)
+	mockProber := func(ctx context.Context, target Target) ErrorCategory {
+		called <- target
+		return ""
+	}
+	d.Register("http", mockProber)
+
+	jobs := make(chan Job, 1)
 	var wg sync.WaitGroup
+
+	target := Target{
+		Name:    "worker-test",
+		Address: "http://worker-pool-test",
+		Scheme:  "http",
+	}
+
+	// Queue the job
+	jobs <- Job{Target: target}
+
 	wg.Add(1)
+	go WorkerPool(ctx, jobs, d, &wg)
 
-	go TargetScheduler(ctx, "http://test-target", jobs, 10*time.Millisecond, &wg)
+	// Verify the mock prober was executed with the correct target data
+	select {
+	case executedTarget := <-called:
+		if executedTarget.Address != target.Address {
+			t.Errorf("Expected target %s to be processed, got %s", target.Address, executedTarget.Address)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("WorkerPool failed to process job in time")
+	}
 
-	time.Sleep(25 * time.Millisecond)
+	// Cleanup
 	cancel()
-
 	wg.Wait()
-	close(jobs)
-
-	count := 0
-	for range jobs {
-		count++
-	}
-
-	if count == 0 {
-		t.Errorf("expected scheduler to produce at least 1 job before cancellation")
-	}
 }

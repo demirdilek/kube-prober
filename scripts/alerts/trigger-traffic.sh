@@ -1,49 +1,65 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "==> [Traffic] Deploying HTTP target with misrouted port to simulate Traffic Collapse..."
+ACTION="${1:-apply}"
+
+if [ "$ACTION" == "clean" ] || [ "$ACTION" == "delete" ]; then
+    echo "==> [Traffic Collapse] Cleaning up simulated collapsed traffic target..."
+    kubectl delete statictarget traffic-collapse-test -n default --ignore-not-found
+    kubectl delete deployment traffic-collapse-service -n default --ignore-not-found
+    kubectl delete service traffic-collapse-service -n default --ignore-not-found
+    echo "==> Target removed and baseline restored."
+    exit 0
+fi
+
+echo "==> [Traffic Collapse] Deploying service scaled to 0 replicas to simulate total traffic failure..."
 
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: httpbin-traffic-test
+  name: traffic-collapse-service
   namespace: default
+  labels:
+    app: traffic-collapse-service
 spec:
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
-      app: httpbin-traffic-test
+      app: traffic-collapse-service
   template:
     metadata:
       labels:
-        app: httpbin-traffic-test
+        app: traffic-collapse-service
     spec:
       containers:
-        - name: httpbin
-          image: mccutchen/go-httpbin:v2.14.0
-          imagePullPolicy: IfNotPresent
-          ports:
-            - containerPort: 8080
+      - name: web
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: httpbin-traffic-test
+  name: traffic-collapse-service
   namespace: default
-  labels:
-    probe: "true"
-  annotations:
-    probe/scheme: "http"
-    probe/path: "/status/200"
 spec:
-  ports:
-    - port: 80
-      # Intentionally pointing to a dead port to simulate a total connection failure (Traffic Collapse)
-      targetPort: 9999
-      name: http
   selector:
-    app: httpbin-traffic-test
+    app: traffic-collapse-service
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+---
+apiVersion: kube-prober.io/v1alpha1
+kind: StaticTarget
+metadata:
+  name: traffic-collapse-test
+  namespace: default
+spec:
+  address: http://traffic-collapse-service.default.svc.cluster.local:80/
+  scheme: http
 EOF
 
-echo "==> Target httpbin-traffic-test deployed. Alert TrafficCollapse will trigger shortly."
+echo "==> Target deployed. 100% of requests will fail, triggering TrafficCollapse alert in ~1 minute."
+echo "==> Run './trigger-traffic.sh clean' to remove the target."

@@ -23,6 +23,10 @@ This document outlines the planned improvements, architectural refinements, and 
   - Add `PodDisruptionBudget` (PDB) and `HorizontalPodAutoscaler` (HPA) manifests to the Helm chart.
 - [X] **Metrics Clean-Up on Target Deletion**
   - Unregister or clean up Prometheus metrics (Gauge/Counter labels) upon target deletion to avoid stale metrics and memory leaks.
+- [ ] **CRD Robustness & Schema Validation (`StaticTarget`)**
+  - [ ] Add OpenAPI v3 schema validation and CEL (Common Expression Language) rules to reject invalid schemes, malformed hostnames/ports, and out-of-range timeouts during `kubectl apply`.
+  - [ ] Support granular per-target configurations in CRD spec (custom HTTP headers, basic auth / bearer tokens, timeout overrides).
+  - [ ] Integrate validating admission webhooks (optional fallback for complex semantic checks).
 
 ---
 
@@ -32,18 +36,24 @@ This document outlines the planned improvements, architectural refinements, and 
   - Implement a sharding mechanism (e.g., consistent hashing or modulo partitioning based on pod ordinal/IPs) across prober replicas when scaled via HPA to prevent duplicate probing and horizontally distribute workload.
 - [X] **SLO / SLI & Error Budget Exporting**
   - Expose calculated multi-window burn rates directly as Prometheus metrics and ship pre-configured `PrometheusRule` manifests.
-- [ ] **Protocol Extension (TCP / TLS / gRPC / DNS)**
+- [X] **Protocol Extension (TCP / TLS / gRPC / DNS)**
   - Extend `prober.Dispatcher` with additional protocol handlers (e.g., gRPC Health Checking, TCP banner checks, TLS certificate expiry tracking).
-- [ ] **Core SRE Protocols for Probing & Monitoring**
+- [X] **Core SRE Protocols for Probing & Monitoring**
   - [X] **TCP:** Layer 4 connectivity & banner checks for databases/caches.
-  - [X] **TLS / SSL:** Certificate expiry tracking and handshake validation.
+  - [X] **TLS / SSL:** Certificate expiry tracking, cluster-CA loading, and SNI handshake validation.
   - [X] **gRPC:** Internal microservices & control plane (`grpc.health.v1.Health`).
   - [X] **DNS:** Resolution time and correctness for critical service lookups.
-- [ ] **SRE Dashboard & Observability Hardening**
+- [X] **SRE Dashboard & Observability Hardening**
   - [X] Add 4 Golden Signals visualization panels.
   - [X] Add dedicated TLS Certificate Expiry tracking panel (stat/gauge).
   - [X] Add TCP Target Availability & Protocol Error Breakdown panels.
   - [X] Add SLO Error Budget Burn Rate panel based on recording rules.
+- [ ] **Out-of-the-Box SLO & Alerting Package**
+  - [ ] Pre-configure Helm chart templates for PrometheusRules (multi-window error budget burn rates, `TLSCertificateExpiringSoon`, DNS resolution failures).
+  - [ ] Ship Grafana dashboard JSON as auto-loadable ConfigMap in the Helm chart.
+- [ ] **Extended Probing Capabilities**
+  - [ ] Out-of-cluster & external probing (custom DNS resolver per target, egress proxy support).
+  - [ ] Synthetic multi-step assertions (HTTP response body regex/JSONPath matching).
 - [ ] **Chaos Engineering Test Suites**
   - Define Chaos Mesh or LitmusChaos scenarios to validate telemetry accuracy during simulated network latency, packet loss, and pod eviction events.
 - [ ] **v1.2.0 — Multi-Zone Vantage Point Probing & Follow-the-Sun Alerting:**
@@ -67,6 +77,8 @@ This document outlines the planned improvements, architectural refinements, and 
 - [ ] **Enterprise Secrets Management Integration**
   - Native integration with HashiCorp Vault or external secret operators for automated, secure injection of tenant-specific webhook credentials and tokens.
 
+---
+
 ## Phase 5: Cloud Native Standards & Developer Experience
 
 - [ ] **OpenTelemetry (OTel):** Migrate from vendor-specific Prometheus client libraries to the OpenTelemetry standard for emitting the 4 Golden Signals natively from the Go application.
@@ -74,7 +86,9 @@ This document outlines the planned improvements, architectural refinements, and 
 - [ ] **SLOs as Code:** Define Service Level Objectives and Error Budgets declaratively using tools like Sloth to automatically generate complex, multi-window burn rate alerts.
 - [ ] **Context-Aware Structured Logging:** Integrate Go's native `slog` with OpenTelemetry to inject Trace IDs into log entries, enabling seamless navigation from a firing alert directly to the failing request.
 
-## Phase 6: Service Mesh Integration & Global Observability**
+---
+
+## Phase 6: Service Mesh Integration & Global Observability
 
 - [ ] **Service Mesh Evaluation:** Evaluate and test a lightweight service mesh (e.g., Linkerd or Cilium) in the k3d cluster to monitor service-to-service communication.
 - [ ] **Global Mesh Metrics Integration:** Extend `kube-prober` to query central mesh metrics alongside direct endpoint probing for a complete global system overview.

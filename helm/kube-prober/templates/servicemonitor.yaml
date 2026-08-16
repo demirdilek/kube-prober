@@ -10,7 +10,8 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app: {{ .Release.Name }}
+      # Must match the Service labels for the ServiceMonitor to discover it
+      {{- include "kube-prober.selectorLabels" . | nindent 6 }} 
   endpoints:
     - port: metrics
       interval: 2s

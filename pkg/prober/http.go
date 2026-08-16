@@ -4,36 +4,45 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"time"
+	"strings"
 )
 
+// HTTPProber executes HTTP and HTTPS connection checks.
 type HTTPProber struct {
 	client *http.Client
 }
 
-// NewHTTPProber creates a new prober with sensible defaults
+// NewHTTPProber creates a new HTTP prober with the provided http.Client.
 func NewHTTPProber(client *http.Client) *HTTPProber {
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+	return &HTTPProber{
+		client: client,
 	}
-	return &HTTPProber{client: client}
 }
 
-// ProbeHTTPTarget executes the HTTP probe and maps the result to an SRE category
-func (p *HTTPProber) ProbeHTTPTarget(ctx context.Context, target string) ErrorCategory {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+// ProbeHTTPTarget attempts to perform an HTTP GET request against the target.
+func (p *HTTPProber) ProbeHTTPTarget(ctx context.Context, target Target) ErrorCategory {
+	address := target.Address
+	if !strings.HasPrefix(address, "http://") && !strings.HasPrefix(address, "https://") {
+		address = target.Scheme + "://" + address
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return CategoryUnknown
+	}
+
+	resp, err := p.client.Do(req)
 	if err != nil {
 		return MapToCategory(err, 0)
 	}
 
-	resp, err := p.client.Do(req)
-	var statusCode int
-	if resp != nil {
-		statusCode = resp.StatusCode
-		// Copy remaining body to io.Discard and close to enable TCP connection reuse
-		_, _ = io.CopyN(io.Discard, resp.Body, 1024*1024) // Copy up to 1MB to discard
-		resp.Body.Close()
+	// Drain and close the response body to reuse the TCP connection in the pool
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	// Classify HTTP 4xx and 5xx responses as errors for SRE Golden Signals
+	if resp.StatusCode >= 400 {
+		return MapToCategory(nil, resp.StatusCode)
 	}
 
-	return MapToCategory(err, statusCode)
+	return ""
 }

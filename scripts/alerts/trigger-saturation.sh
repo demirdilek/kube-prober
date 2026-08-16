@@ -1,94 +1,98 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "==> [Saturation] Deploying dual slow targets & setting WORKERS=2 to fully saturate worker pool..."
+ACTION="${1:-apply}"
 
-# 1. Deployment von zwei langlaufenden Targets (/delay/2)
+if [ "$ACTION" == "clean" ] || [ "$ACTION" == "delete" ]; then
+    echo "==> [Saturation] Cleaning up simulated saturation targets..."
+    kubectl delete statictarget -l test-type=saturation-hang -n default --ignore-not-found
+    kubectl delete deployment httpbin-saturation -n default --ignore-not-found
+    kubectl delete service httpbin-saturation -n default --ignore-not-found
+    
+    echo "==> Restoring prober worker pool capacity (WORKERS=50)..."
+    kubectl set env deployment/kube-prober WORKERS=50 -n default
+    kubectl rollout status deployment/kube-prober -n default --timeout=60s
+    echo "==> Saturation scenario cleaned up."
+    exit 0
+fi
+
+echo "==> [Saturation] Throttling kube-prober worker pool to WORKERS=2..."
+kubectl set env deployment/kube-prober WORKERS=2 -n default
+kubectl rollout status deployment/kube-prober -n default --timeout=60s
+
+echo "==> [Saturation] Deploying slow HTTP server and blocking targets..."
+
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: httpbin-sat-1
+  name: httpbin-saturation
   namespace: default
+  labels:
+    app: httpbin-saturation
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: httpbin-sat-1
+      app: httpbin-saturation
   template:
     metadata:
       labels:
-        app: httpbin-sat-1
+        app: httpbin-saturation
     spec:
       containers:
-        - name: httpbin
-          image: mccutchen/go-httpbin:v2.14.0
-          imagePullPolicy: IfNotPresent
-          ports:
-            - containerPort: 8080
+      - name: httpbin
+        image: mccutchen/go-httpbin:v2.14.0
+        ports:
+        - containerPort: 8080
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: httpbin-sat-1
+  name: httpbin-saturation
+  namespace: default
+spec:
+  selector:
+    app: httpbin-saturation
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: kube-prober.io/v1alpha1
+kind: StaticTarget
+metadata:
+  name: saturation-hang-1
   namespace: default
   labels:
-    probe: "true"
-  annotations:
-    probe/path: "/delay/2"
+    test-type: saturation-hang
 spec:
-  ports:
-    - port: 80
-      targetPort: 8080
-      name: http
-  selector:
-    app: httpbin-sat-1
+  address: http://httpbin-saturation.default.svc.cluster.local:8080/delay/10
+  scheme: http
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: kube-prober.io/v1alpha1
+kind: StaticTarget
 metadata:
-  name: httpbin-sat-2
-  namespace: default
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: httpbin-sat-2
-  template:
-    metadata:
-      labels:
-        app: httpbin-sat-2
-    spec:
-      containers:
-        - name: httpbin
-          image: mccutchen/go-httpbin:v2.14.0
-          imagePullPolicy: IfNotPresent
-          ports:
-            - containerPort: 8080
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: httpbin-sat-2
+  name: saturation-hang-2
   namespace: default
   labels:
-    probe: "true"
-  annotations:
-    probe/path: "/delay/2"
+    test-type: saturation-hang
 spec:
-  ports:
-    - port: 80
-      targetPort: 8080
-      name: http
-  selector:
-    app: httpbin-sat-2
+  address: http://httpbin-saturation.default.svc.cluster.local:8080/delay/10
+  scheme: http
+---
+apiVersion: kube-prober.io/v1alpha1
+kind: StaticTarget
+metadata:
+  name: saturation-hang-3
+  namespace: default
+  labels:
+    test-type: saturation-hang
+spec:
+  address: http://httpbin-saturation.default.svc.cluster.local:8080/delay/10
+  scheme: http
 EOF
 
-# 2. Worker-Kapazität im kube-prober auf 2 drosseln
-if kubectl get deployment kube-prober >/dev/null 2>&1; then
-  kubectl set env deployment/kube-prober WORKERS=2
-  echo "==> WORKERS capacity reduced to 2 with 2 concurrent slow targets. Alert MaxWorkersReached will trigger in ~1 min."
-else
-  echo "ERROR: Deployment kube-prober not found."
-  exit 1
-fi
+echo "==> Waiting for httpbin-saturation rollout..."
+kubectl rollout status deployment/httpbin-saturation -n default --timeout=60s
+echo "==> Targets active. Worker saturation is now locked at 100% (2/2 workers busy)."

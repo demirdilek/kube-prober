@@ -4,9 +4,10 @@ metadata:
   name: "{{ .Release.Name }}-rules"
   labels:
     release: prom-stack
+    {{- include "kube-prober.labels" . | nindent 4 }}
 spec:
   groups:
-    - name: kube-prober-golden-signals
+    - name: kube-prober-alertmanager-rules
       rules:
         # Latency: High p99 Latency
         - alert: HighLatency

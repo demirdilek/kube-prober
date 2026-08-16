@@ -5,7 +5,7 @@ metadata:
   namespace: default
   labels:
     grafana_dashboard: "1"
-    app.kubernetes.io/name: kube-prober
+    {{- include "kube-prober.labels" . | nindent 4 }}
 data:
   kube_prober_dashboard.json: |-
 {{ .Files.Get "dashboards/kube_prober_dashboard.json" | indent 4 }}

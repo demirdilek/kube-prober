@@ -1,0 +1,39 @@
+# Validate outbound external network resolution (North-South)
+apiVersion: kube-prober.io/v1alpha1
+kind: StaticTarget
+metadata:
+  name: google-public-dns
+  namespace: {{ .Release.Namespace }}
+spec:
+  address: 8.8.8.8
+  scheme: dns
+---
+# Validate internal cluster service discovery (East-West)
+apiVersion: kube-prober.io/v1alpha1
+kind: StaticTarget
+metadata:
+  name: cluster-internal-dns
+  namespace: {{ .Release.Namespace }}
+spec:
+  address: kube-dns.kube-system.svc.cluster.local
+  scheme: dns
+---
+# Validate the Kubernetes Control Plane availability and certificate health
+apiVersion: kube-prober.io/v1alpha1
+kind: StaticTarget
+metadata:
+  name: kubernetes-api-server
+  namespace: {{ .Release.Namespace }}
+spec:
+  address: kubernetes.default.svc.cluster.local:443
+  scheme: tls
+---
+# Validate the internal Ingress Controller routing layer (Traefik is default in k3s)
+apiVersion: kube-prober.io/v1alpha1
+kind: StaticTarget
+metadata:
+  name: traefik-ingress-controller
+  namespace: {{ .Release.Namespace }}
+spec:
+  address: traefik.kube-system.svc.cluster.local:80
+  scheme: tcp

@@ -1,0 +1,4 @@
+# Inhalt der .repomixignore
+deploy/argocd/install-v3-5-1.yaml
+*.log
+tmp/

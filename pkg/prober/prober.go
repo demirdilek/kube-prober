@@ -11,7 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// ErrorCategory represents the 6 SRE error types
+// ErrorCategory represents the SRE error types.
 type ErrorCategory string
 
 const (
@@ -20,13 +20,14 @@ const (
 	CategoryTimeout           ErrorCategory = "timeout"
 	CategoryHTTP              ErrorCategory = "http_error"
 	CategoryGRPCNotServing    ErrorCategory = "grpc_not_serving"
+	CategoryGRPCError         ErrorCategory = "grpc_error"
 	CategoryConnectionRefused ErrorCategory = "connection_refused"
 	CategoryAuth              ErrorCategory = "authentication_error"
 	CategoryUnhealthy         ErrorCategory = "unhealthy_service"
 	CategoryUnknown           ErrorCategory = "unknown_error"
 )
 
-// Hint returns actionable troubleshooting context for the SRE operator
+// Hint returns actionable troubleshooting context for the SRE operator.
 func (c ErrorCategory) Hint() string {
 	switch c {
 	case CategoryDNS:
@@ -34,11 +35,13 @@ func (c ErrorCategory) Hint() string {
 	case CategoryTLS:
 		return "Check TLS certificate validity, SAN coverage, or CA trust store"
 	case CategoryTimeout:
-		return "Target is slow to respond; check upstream latency, network network policies, or resource limits"
+		return "Target is slow to respond; check upstream latency, network policies, or resource limits"
 	case CategoryHTTP:
 		return "Application responded with 4xx/5xx; check application logs and payload specs"
 	case CategoryGRPCNotServing:
-		return "gRPC service is not serving; check service status and logs"
+		return "gRPC health check returned NOT_SERVING or service unknown; check application health endpoints and internal dependencies"
+	case CategoryGRPCError:
+		return "gRPC call failed with RPC status error; check server logs, credentials, TLS configurations, and RPC status codes"
 	case CategoryConnectionRefused:
 		return "Connection refused; check if the service is running and listening on the specified port"
 	case CategoryAuth:
@@ -52,7 +55,7 @@ func (c ErrorCategory) Hint() string {
 	}
 }
 
-// MapToCategory unwraps the error chain and categorizes network/HTTP issues
+// MapToCategory unwraps the error chain and categorizes network/HTTP/gRPC issues.
 func MapToCategory(err error, statusCode int) ErrorCategory {
 	if err == nil {
 		if statusCode >= 400 {
@@ -68,14 +71,19 @@ func MapToCategory(err error, statusCode int) ErrorCategory {
 	// gRPC specific error handling
 	if st, ok := status.FromError(err); ok {
 		switch st.Code() {
+		case codes.OK:
+			return ""
 		case codes.DeadlineExceeded:
 			return CategoryTimeout
 		case codes.Unavailable:
 			return CategoryConnectionRefused
 		case codes.Unauthenticated, codes.PermissionDenied:
 			return CategoryAuth
-		default:
+		case codes.NotFound:
+			// Standard gRPC Health Protocol returns NotFound when the queried service name is unregistered/not serving
 			return CategoryGRPCNotServing
+		default:
+			return CategoryGRPCError
 		}
 	}
 
@@ -83,12 +91,14 @@ func MapToCategory(err error, statusCode int) ErrorCategory {
 	var certErr *x509.CertificateInvalidError
 	var unknownAuthErr x509.UnknownAuthorityError
 	var hostnameErr x509.HostnameError
-	var recErr tls.RecordHeaderError
 
+	var recErr tls.RecordHeaderError
+	var recErrPtr *tls.RecordHeaderError
 	if errors.As(err, &certErr) ||
 		errors.As(err, &unknownAuthErr) ||
 		errors.As(err, &hostnameErr) ||
-		errors.As(err, &recErr) {
+		errors.As(err, &recErr) ||
+		errors.As(err, &recErrPtr) {
 		return CategoryTLS
 	}
 

@@ -2,17 +2,20 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ .Release.Name }}
+  labels:
+    {{- include "kube-prober.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.hpa.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
     matchLabels:
-      app: {{ .Release.Name }}
+      {{- include "kube-prober.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        app: {{ .Release.Name }}
+        {{- include "kube-prober.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
       serviceAccountName: "{{ .Release.Name }}-sa"
       securityContext:
@@ -25,7 +28,8 @@ spec:
           whenUnsatisfiable: {{ .Values.topologySpreadConstraints.whenUnsatisfiable }}
           labelSelector:
             matchLabels:
-              app: {{ .Release.Name }}
+              # Must match the template labels for topology spread to work
+              {{- include "kube-prober.selectorLabels" . | nindent 10 }}
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}

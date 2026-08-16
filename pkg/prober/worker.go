@@ -8,15 +8,15 @@ import (
 )
 
 type Job struct {
-	Target string
+	Target Target
 }
 
 // ProbeTarget executes a probe against a target and records 4 Golden Signals metrics.
-func ProbeTarget(ctx context.Context, target string, dispatcher *Dispatcher) {
+func ProbeTarget(ctx context.Context, target Target, dispatcher *Dispatcher) {
 	SaturationGauge.Inc()
 	defer SaturationGauge.Dec()
 
-	TrafficCounter.WithLabelValues(target).Inc()
+	TrafficCounter.WithLabelValues(target.Address).Inc()
 
 	// Create a new context with a timeout for the probe execution
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -26,19 +26,20 @@ func ProbeTarget(ctx context.Context, target string, dispatcher *Dispatcher) {
 	errCat := dispatcher.Execute(probeCtx, target)
 	duration := time.Since(startTime).Seconds()
 
-	LatencyHistogram.WithLabelValues(target).Observe(duration)
+	LatencyHistogram.WithLabelValues(target.Address).Observe(duration)
 
 	// Record the error category if there was an error, otherwise log success
 	if errCat != "" {
-		ErrorCounter.WithLabelValues(target, string(errCat)).Inc()
+		ErrorCounter.WithLabelValues(target.Address, string(errCat)).Inc()
 		slog.Warn(
 			"Target probing failed",
-			"target", target,
+			"target", target.Address,
+			"scheme", target.Scheme,
 			"error_category", errCat,
 			"hint", errCat.Hint(),
 		)
 	} else {
-		slog.Debug("Target probed successfully", "target", target, "duration_seconds", duration)
+		slog.Debug("Target probed successfully", "target", target.Address, "duration_seconds", duration)
 	}
 }
 
@@ -59,12 +60,13 @@ func WorkerPool(ctx context.Context, jobs <-chan Job, dispatcher *Dispatcher, wg
 }
 
 // TargetScheduler pushes probe jobs into the jobs channel periodically.
-func TargetScheduler(ctx context.Context, target string, jobs chan<- Job, interval time.Duration, wg *sync.WaitGroup) {
+func TargetScheduler(ctx context.Context, target Target, jobs chan<- Job, interval time.Duration, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	// Initial immediate probe
 	select {
 	case jobs <- Job{Target: target}:
 	case <-ctx.Done():

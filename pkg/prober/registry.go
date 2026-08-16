@@ -3,67 +3,47 @@ package prober
 import (
 	"fmt"
 	"hash/fnv"
-	"sort"
-	"strings"
+	"log/slog"
 	"sync"
 
 	discoveryv1 "k8s.io/api/discovery/v1"
 )
 
-// TargetEvent represents a change in the discovered targets.
-type TargetEvent struct {
-	Target  string
-	IsAdded bool
-}
-
+// Registry holds the state of all discovered targets.
 type Registry struct {
 	mu            sync.RWMutex
-	targets       map[string]string
+	targets       map[string]Target
 	sliceTargets  map[string][]string
-	Events        chan TargetEvent
-	selfPodIP     string
 	clusterPodIPs []string
+	selfPodIP     string
+	active        map[string]bool
+	Events        chan TargetEvent
 }
 
-func NewRegistry() *Registry {
+// NewRegistry initializes a new Registry.
+func NewRegistry(selfPodIP string) *Registry {
 	return &Registry{
-		targets:       make(map[string]string),
-		sliceTargets:  make(map[string][]string),
-		Events:        make(chan TargetEvent, 1000),
-		clusterPodIPs: make([]string, 0),
+		targets:      make(map[string]Target),
+		sliceTargets: make(map[string][]string),
+		active:       make(map[string]bool),
+		selfPodIP:    selfPodIP,
+		Events:       make(chan TargetEvent, 1000),
 	}
 }
 
-// SetSelfIP initializes the pod's own identity used for hash comparisons.
-func (r *Registry) SetSelfIP(ip string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.selfPodIP = ip
+// hashTargetAndPod creates a deterministic hash for Rendezvous Hashing.
+func hashTargetAndPod(target, podIP string) uint64 {
+	// Use a null-byte separator to prevent string concatenation collisions
+	key := target + "\x00" + podIP
+	h := fnv.New64a()
+	h.Write([]byte(key))
+	return h.Sum64()
 }
 
-// UpdatePeers updates the active replica topology and triggers a rebalance.
-func (r *Registry) UpdatePeers(peers []string) {
-	r.mu.Lock()
-
-	// Sort IPs to guarantee an identical and deterministic hash topology across all replicas
-	sortedPeers := make([]string, len(peers))
-	copy(sortedPeers, peers)
-	sort.Strings(sortedPeers)
-
-	r.clusterPodIPs = sortedPeers
-
-	// Collect events while holding the lock
-	eventsToSend := r.rebalanceTargetsLocked()
-
-	r.mu.Unlock() // 🔴 ALWAYS Unlock BEFORE writing to channels!
-
-	// Emit events asynchronously to prevent deadlocks
-	go r.emitEvents(eventsToSend)
-}
-
-// ShouldProcessTarget uses Rendezvous Hashing (Highest Random Weight)
-// to determine if this specific pod is responsible for probing the target.
-func (r *Registry) ShouldProcessTarget(target string) bool {
+// shouldProcessTargetLocked checks if this replica should process the target.
+// The caller MUST hold r.mu (Lock or RLock) before calling this function.
+// ShouldProcessTarget is the safe, exported version for external calls.
+func (r *Registry) shouldProcessTargetLocked(target string) bool {
 	if r.selfPodIP == "" || len(r.clusterPodIPs) == 0 {
 		return true
 	}
@@ -71,147 +51,257 @@ func (r *Registry) ShouldProcessTarget(target string) bool {
 	var highestHash uint64
 	var selectedPod string
 
-	for _, podIP := range r.clusterPodIPs {
+	for i, podIP := range r.clusterPodIPs {
 		h := hashTargetAndPod(target, podIP)
-		if h > highestHash {
+		// CRITICAL FIX: Force initialization on the first iteration
+		if i == 0 || h > highestHash {
 			highestHash = h
 			selectedPod = podIP
 		}
 	}
 
-	return selectedPod == r.selfPodIP
+	isOwner := selectedPod == r.selfPodIP
+
+	// DEBUG: Log the sharding decision and the current state of cluster IPs
+	slog.Debug(
+		"Sharding evaluation",
+		"target", target,
+		"assigned_pod", selectedPod,
+		"my_pod", r.selfPodIP,
+		"is_owner", isOwner,
+		"peer_count", len(r.clusterPodIPs),
+		"cluster_ips", r.clusterPodIPs,
+	)
+
+	return isOwner
 }
 
-func hashTargetAndPod(target, podIP string) uint64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(target + ":" + podIP))
-	return h.Sum64()
+// ShouldProcessTarget checks if this replica should process the target.
+// This is the safe, exported version for external calls.
+func (r *Registry) ShouldProcessTarget(targetAddress string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.shouldProcessTargetLocked(targetAddress)
 }
 
-// rebalanceTargetsLocked re-evaluates all known targets against the new topology.
-// It returns a list of events to be emitted AFTER the lock is released.
-func (r *Registry) rebalanceTargetsLocked() []TargetEvent {
-	var events []TargetEvent
-	for targetURL := range r.targets {
-		shouldProcess := r.ShouldProcessTarget(targetURL)
-		events = append(events, TargetEvent{Target: targetURL, IsAdded: shouldProcess})
-	}
-	return events
-}
-
-// UpdateFromEndpointSlice adds newly discovered targets from Kubernetes EndpointSlices.
-func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, scheme, path string) {
-	r.mu.Lock()
-
-	sliceKey := slice.Namespace + "/" + slice.Name
-
-	if scheme == "" {
-		scheme = "http"
-	}
-	if path != "" && !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-
-	portVal := int32(80)
-	if len(slice.Ports) > 0 && slice.Ports[0].Port != nil {
-		portVal = *slice.Ports[0].Port
-	}
-
-	newTargets := make(map[string]bool)
-	var newTargetList []string
-
-	for _, ep := range slice.Endpoints {
-		for _, addr := range ep.Addresses {
-			targetURL := fmt.Sprintf("%s://%s:%d%s", scheme, addr, portVal, path)
-			newTargets[targetURL] = true
-			newTargetList = append(newTargetList, targetURL)
-		}
-	}
-
+// UpdatePeers updates the list of active prober pods and rebalances targets.
+func (r *Registry) UpdatePeers(peers []string) {
 	var eventsToSend []TargetEvent
 
-	// 2. Remove old targets
-	oldTargets := r.sliceTargets[sliceKey]
-	for _, oldTarget := range oldTargets {
-		if !newTargets[oldTarget] {
-			delete(r.targets, oldTarget)
-			eventsToSend = append(eventsToSend, TargetEvent{Target: oldTarget, IsAdded: false})
-		}
-	}
+	func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
 
-	// 3. Add new targets
-	for _, newTarget := range newTargetList {
-		if _, exists := r.targets[newTarget]; !exists {
-			r.targets[newTarget] = slice.Namespace
-			if r.ShouldProcessTarget(newTarget) {
-				eventsToSend = append(eventsToSend, TargetEvent{Target: newTarget, IsAdded: true})
+		r.clusterPodIPs = peers
+
+		// Re-evaluate ownership for every known target
+		for address, target := range r.targets {
+
+			shouldProcess := r.shouldProcessTargetLocked(address)
+			isCurrentlyProcessing := r.active[address]
+
+			if shouldProcess && !isCurrentlyProcessing {
+				r.active[address] = true
+				eventsToSend = append(eventsToSend, TargetEvent{
+					Target:  target,
+					IsAdded: true,
+				})
+			} else if !shouldProcess && isCurrentlyProcessing {
+				r.active[address] = false
+				eventsToSend = append(eventsToSend, TargetEvent{
+					Target:  target,
+					IsAdded: false,
+				})
 			}
 		}
+	}()
+	for _, evt := range eventsToSend {
+		select {
+		case r.Events <- evt:
+		default:
+			slog.Warn("Registry events channel full, dropping event to prevent deadlock", "target", evt.Target.Address)
+		}
 	}
-
-	// 4. Update the mapping
-	if len(newTargetList) > 0 {
-		r.sliceTargets[sliceKey] = newTargetList
-	} else {
-		delete(r.sliceTargets, sliceKey)
-	}
-
-	r.mu.Unlock() // 🔴 Unlock BEFORE writing to channels!
-
-	go r.emitEvents(eventsToSend)
 }
 
-// RemoveEndpointSlice removes deleted targets and stops their local schedulers.
-func (r *Registry) RemoveEndpointSlice(slice *discoveryv1.EndpointSlice, scheme, path string) {
-	r.mu.Lock()
-
-	sliceKey := slice.Namespace + "/" + slice.Name
-	oldTargets := r.sliceTargets[sliceKey]
-
+// UpdateFromEndpointSlice synchronizes the targets for a given EndpointSlice.
+func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, scheme, path string) {
 	var eventsToSend []TargetEvent
 
-	for _, targetURL := range oldTargets {
-		if _, exists := r.targets[targetURL]; exists {
-			delete(r.targets, targetURL)
-			eventsToSend = append(eventsToSend, TargetEvent{Target: targetURL, IsAdded: false})
+	func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+
+		sliceKey := slice.Namespace + "/" + slice.Name
+		newTargetMap := make(map[string]bool)
+		var newTargetList []string
+
+		// Fallback to port 80 if the EndpointSlice defines no ports
+		var activePorts []int32
+		if len(slice.Ports) == 0 {
+			activePorts = append(activePorts, 80)
+		} else {
+			for _, port := range slice.Ports {
+				if port.Port != nil {
+					activePorts = append(activePorts, *port.Port)
+				}
+			}
+		}
+
+		for _, ep := range slice.Endpoints {
+			if ep.Conditions.Ready == nil || !*ep.Conditions.Ready {
+				continue
+			}
+			for _, port := range activePorts {
+				for _, ip := range ep.Addresses {
+					address := fmt.Sprintf("%s://%s:%d%s", scheme, ip, port, path)
+					newTargetMap[address] = true
+					newTargetList = append(newTargetList, address)
+				}
+			}
+		}
+
+		// Remove old targets
+		oldTargets := r.sliceTargets[sliceKey]
+		for _, oldAddress := range oldTargets {
+			if !newTargetMap[oldAddress] {
+				delete(r.targets, oldAddress)
+
+				// CRITICAL FIX: Only send a stop event if we actually processed it
+				wasActive := r.active[oldAddress]
+				delete(r.active, oldAddress)
+
+				if wasActive {
+					eventsToSend = append(eventsToSend, TargetEvent{
+						Target:  Target{Address: oldAddress},
+						IsAdded: false,
+					})
+				}
+			}
+		}
+
+		// Add new targets
+		for _, newAddress := range newTargetList {
+			if _, exists := r.targets[newAddress]; !exists {
+				fullTarget := Target{
+					Name:    sliceKey,
+					Address: newAddress,
+					Scheme:  scheme,
+					Static:  false,
+				}
+				r.targets[newAddress] = fullTarget
+
+				if r.shouldProcessTargetLocked(newAddress) {
+					r.active[newAddress] = true
+					eventsToSend = append(eventsToSend, TargetEvent{
+						Target:  fullTarget,
+						IsAdded: true,
+					})
+				}
+			}
+		}
+
+		r.sliceTargets[sliceKey] = newTargetList
+	}()
+
+	for _, evt := range eventsToSend {
+		select {
+		case r.Events <- evt:
+		default:
+			slog.Warn("Registry events channel full, dropping event to prevent deadlock", "target", evt.Target.Address)
 		}
 	}
-
-	delete(r.sliceTargets, sliceKey)
-
-	r.mu.Unlock() // 🔴 Unlock BEFORE writing to channels!
-
-	go r.emitEvents(eventsToSend)
 }
 
-// Helper to send events asynchronously
-func (r *Registry) emitEvents(events []TargetEvent) {
-	for _, evt := range events {
-		r.Events <- evt
-	}
-}
+// RemoveEndpointSlice completely removes all targets associated with a given EndpointSlice.
+func (r *Registry) RemoveEndpointSlice(slice *discoveryv1.EndpointSlice, scheme, path string) {
+	var eventsToSend []TargetEvent
 
-// GetTargets returns all targets currently owned by this specific pod instance.
-func (r *Registry) GetTargets() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
 
-	targets := make([]string, 0, len(r.targets))
-	for t := range r.targets {
-		if r.ShouldProcessTarget(t) {
-			targets = append(targets, t)
+		sliceKey := slice.Namespace + "/" + slice.Name
+		oldTargets := r.sliceTargets[sliceKey]
+
+		for _, oldAddress := range oldTargets {
+			delete(r.targets, oldAddress)
+			delete(r.active, oldAddress)
+			eventsToSend = append(eventsToSend, TargetEvent{
+				Target:  Target{Address: oldAddress},
+				IsAdded: false,
+			})
+		}
+
+		delete(r.sliceTargets, sliceKey)
+	}()
+
+	for _, evt := range eventsToSend {
+		select {
+		case r.Events <- evt:
+		default:
+			slog.Warn("Registry events channel full, dropping event to prevent deadlock", "target", evt.Target.Address)
 		}
 	}
-	return targets
 }
 
-// GetPeers returns a copy of the current sorted peer IPs for testing or debugging
-func (r *Registry) GetPeers() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+// Add manually registers a single static target.
+func (r *Registry) Add(target Target) {
+	var eventToSend *TargetEvent
 
-	peersCopy := make([]string, len(r.clusterPodIPs))
-	copy(peersCopy, r.clusterPodIPs)
+	func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
 
-	return peersCopy
+		if _, exists := r.targets[target.Address]; !exists {
+			r.targets[target.Address] = target
+
+			if r.shouldProcessTargetLocked(target.Address) {
+				r.active[target.Address] = true
+				eventToSend = &TargetEvent{
+					Target:  target,
+					IsAdded: true,
+				}
+			}
+		}
+	}()
+
+	if eventToSend != nil {
+		select {
+		case r.Events <- *eventToSend:
+		default:
+			slog.Warn("Registry events channel full, dropping or delayed event", "target", target.Address)
+		}
+	}
+}
+
+// Remove deletes a target by address and emits a removal event
+func (r *Registry) Remove(address string) {
+	var eventToSend *TargetEvent
+
+	func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+
+		if target, exists := r.targets[address]; exists {
+			delete(r.targets, address)
+			wasActive := r.active[address]
+			delete(r.active, address)
+
+			if wasActive {
+				eventToSend = &TargetEvent{
+					Target:  target,
+					IsAdded: false,
+				}
+			}
+		}
+	}()
+
+	if eventToSend != nil {
+		select {
+		case r.Events <- *eventToSend:
+		default:
+			slog.Warn("Registry events channel full, dropping or delayed event", "target", address)
+		}
+	}
 }

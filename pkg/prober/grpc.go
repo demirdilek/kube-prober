@@ -2,66 +2,75 @@ package prober
 
 import (
 	"context"
-	"crypto/tls"
 	"net/url"
 	"strings"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
-	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 )
 
-// GRPCProber
-type GRPCProber struct {
-	tlsConfig *tls.Config
+// GRPCProber executes gRPC connection checks.
+type GRPCProber struct{}
+
+// NewGRPCProber creates a new gRPC prober.
+func NewGRPCProber() *GRPCProber {
+	return &GRPCProber{}
 }
 
-func NewGRPCProber(cfg *tls.Config) *GRPCProber {
-	return &GRPCProber{tlsConfig: cfg}
-}
-
-func (p *GRPCProber) ProbeGRPCTarget(ctx context.Context, target string) ErrorCategory {
-	// 1. We need to parse the URL and the service name from the target
-
-	// If the target does not have a scheme, we assume it's gRPC and prepend "grpc://"
-	if !strings.Contains(target, "://") {
-		target = "grpc://" + target
+// ProbeGRPCTarget attempts to establish a gRPC connection and verify health status.
+func (p *GRPCProber) ProbeGRPCTarget(ctx context.Context, target Target) ErrorCategory {
+	rawAddress := target.Address
+	if !strings.Contains(rawAddress, "://") {
+		rawAddress = "grpc://" + rawAddress
 	}
 
-	parsedURL, err := url.Parse(target)
-	if err != nil {
-		return CategoryUnknown
-	}
-	serviceName := strings.TrimPrefix(parsedURL.Path, "/")
-	var opts []grpc.DialOption
+	address := target.Address
+	serviceName := ""
 
-	// 2. Decision about TLS secure or not for dial options
-	if p.tlsConfig != nil {
-		cfg := p.tlsConfig.Clone()
-		cfg.ServerName = parsedURL.Hostname()
-		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(cfg)))
-	} else {
-		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if parsedURL, err := url.Parse(rawAddress); err == nil {
+		if parsedURL.Host != "" {
+			address = parsedURL.Host
+		}
+		// Extract optional service path, e.g. "/UnregisteredService" -> "UnregisteredService"
+		serviceName = strings.TrimPrefix(parsedURL.Path, "/")
 	}
 
-	// 3. establish gRPC Connection
-	conn, err := grpc.NewClient(parsedURL.Host, opts...)
+	// Initialize gRPC client
+	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return MapToCategory(err, 0)
 	}
 	defer conn.Close()
 
-	healthClient := healthv1.NewHealthClient(conn)
-	// 4. Perform health check
-	healthResp, err := healthClient.Check(ctx, &healthv1.HealthCheckRequest{Service: serviceName})
+	// Perform gRPC Health Check directly with the request context
+	healthClient := healthpb.NewHealthClient(conn)
+
+	resp, err := healthClient.Check(ctx, &healthpb.HealthCheckRequest{
+		Service: serviceName,
+	})
 	if err != nil {
-		return MapToCategory(err, 0)
+		if st, ok := status.FromError(err); ok {
+			switch st.Code() {
+			case codes.NotFound:
+				return CategoryGRPCNotServing
+			case codes.Unavailable:
+				return CategoryConnectionRefused
+			case codes.DeadlineExceeded:
+				return CategoryTimeout
+			case codes.Unimplemented:
+				// Server is reachable on gRPC transport, but does not implement grpc.health.v1
+				return ""
+			}
+		}
+		return CategoryGRPCError
 	}
 
-	if healthResp.Status != healthv1.HealthCheckResponse_SERVING {
+	if resp.GetStatus() != healthpb.HealthCheckResponse_SERVING {
 		return CategoryGRPCNotServing
 	}
 
-	return ""
+	return "" // Success
 }
