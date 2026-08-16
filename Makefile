@@ -193,3 +193,20 @@ argocd-set-pass: ## Set a custom Argo CD admin password using the running pod
 	HASH=$$(kubectl exec -n argocd deployment/argocd-server -- argocd account bcrypt --password "$$MYPASS"); \
 	kubectl patch secret argocd-secret -n argocd -p "{\"stringData\": {\"admin.password\": \"$$HASH\", \"admin.passwordMtime\": \"$$(date -u +%FT%TZ)\"}}"; \
 	echo "==> Password successfully updated to: $$MYPASS"
+
+release: ## Bump version, update manifests, commit, tag, and push (e.g. make release V=1.0.2)
+	@if [ -z "$(V)" ]; then \
+		echo "Error: Version parameter missing. Usage: make release V=1.0.2"; \
+		exit 1; \
+	fi
+	@echo "==> Bumping version to $(V)..."
+	@sed -i 's/^version:.*/version: $(V)/' helm/kube-prober/Chart.yaml
+	@sed -i 's/^appVersion:.*/appVersion: "$(V)"/' helm/kube-prober/Chart.yaml
+	@sed -i 's|ghcr.io/demirdilek/kube-prober:[0-9]*\.[0-9]*\.[0-9]*|ghcr.io/demirdilek/kube-prober:$(V)|g' README.md
+	@git add helm/kube-prober/Chart.yaml README.md
+	@git commit -m "chore(release): bump version to $(V)"
+	@git tag v$(V)
+	@echo "==> Pushing commit and tag v$(V)..."
+	@git push origin main
+	@git push origin v$(V)
+	@echo "==> Release v$(V) successfully initiated."
