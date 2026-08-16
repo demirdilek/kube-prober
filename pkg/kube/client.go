@@ -5,14 +5,14 @@ import (
 	"os"
 	"path/filepath"
 
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// InitClient initializes a Kubernetes clientset with automatic fallback:
-// uses InClusterConfig when running inside K8s, or local kubeconfig (~/.kube/config) during local development.
-func InitClient() (*kubernetes.Clientset, error) {
+// GetConfig returns the Kubernetes rest.Config with automatic in-cluster or local fallback.
+func GetConfig() (*rest.Config, error) {
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		kubeconfig := os.Getenv("KUBECONFIG")
@@ -24,11 +24,23 @@ func InitClient() (*kubernetes.Clientset, error) {
 			return nil, fmt.Errorf("failed to build k8s config: %w", err)
 		}
 	}
+	return config, nil
+}
 
-	clientset, err := kubernetes.NewForConfig(config)
+// InitClient initializes a standard Kubernetes clientset.
+func InitClient() (*kubernetes.Clientset, error) {
+	config, err := GetConfig()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create k8s clientset: %w", err)
+		return nil, err
 	}
+	return kubernetes.NewForConfig(config)
+}
 
-	return clientset, nil
+// InitDynamicClient initializes a dynamic client for CRD operations.
+func InitDynamicClient() (dynamic.Interface, error) {
+	config, err := GetConfig()
+	if err != nil {
+		return nil, err
+	}
+	return dynamic.NewForConfig(config)
 }

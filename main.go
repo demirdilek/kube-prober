@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/rest"
 
 	"github.com/demirdilek/kube-prober/pkg/env"
 	"github.com/demirdilek/kube-prober/pkg/kube"
@@ -95,27 +93,25 @@ func main() {
 
 	clientset, err := kube.InitClient()
 	if err != nil {
-		slog.Error("Initialization failed", "error", err)
+		slog.Error("Initialization failed for clientset", "error", err)
+		os.Exit(1)
+	}
+
+	dynClient, err := kube.InitDynamicClient()
+	if err != nil {
+		slog.Error("Initialization failed for dynamic client", "error", err)
 		os.Exit(1)
 	}
 
 	selfIP := os.Getenv("POD_IP")
-
-	// 3. Initialize your registry
 	registry := prober.NewRegistry(selfIP)
 
-	config, _ := rest.InClusterConfig()
-	dynClient, err := dynamic.NewForConfig(config)
-	if err != nil || dynClient == nil {
-		slog.Error("Failed to create dynamic client, StaticTargets disabled", "error", err)
-	} else {
-		// Start CRD Watcher Informer in background nur wenn dynClient gültig ist
-		go func() {
-			if err := prober.WatchStaticTargets(ctx, dynClient, registry); err != nil && !errors.Is(err, context.Canceled) {
-				slog.Error("StaticTargets informer stopped", "error", err)
-			}
-		}()
-	}
+	// Start CRD Watcher Informer in background
+	go func() {
+		if err := prober.WatchStaticTargets(ctx, dynClient, registry); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("StaticTargets informer stopped", "error", err)
+		}
+	}()
 
 	// Initialize the unified KubeWatcher for both peer topology and target discovery
 	watcher := prober.NewKubeWatcher(clientset, registry)
