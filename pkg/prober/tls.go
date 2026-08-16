@@ -74,6 +74,9 @@ func (p *TLSProber) ProbeTLSTarget(ctx context.Context, target Target) ErrorCate
 	if cfg.ServerName == "" {
 		cfg.ServerName = host
 	}
+	if target.InsecureSkipVerify {
+		cfg.InsecureSkipVerify = true
+	}
 
 	tlsConn := tls.Client(conn, cfg)
 

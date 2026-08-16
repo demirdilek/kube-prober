@@ -10,28 +10,20 @@ if [ "$ACTION" == "clean" ] || [ "$ACTION" == "delete" ]; then
     kubectl delete service tls-expiry-server -n default --ignore-not-found
     kubectl delete configmap tls-expiry-nginx-conf -n default --ignore-not-found
     kubectl delete secret tls-expiring-cert -n default --ignore-not-found
-
-    echo "==> [TLS Expiry] Restoring secure TLS verification (TLS_INSECURE_SKIP_VERIFY=false)..."
-    kubectl set env deployment/kube-prober TLS_INSECURE_SKIP_VERIFY=false -n default >/dev/null 2>&1 || true
-    kubectl rollout status deployment/kube-prober -n default --timeout=60s
     echo "==> Cleanup complete."
     exit 0
 fi
 
-echo "==> [TLS Expiry] Enabling InsecureSkipVerify on kube-prober to parse self-signed expiry metrics..."
-kubectl set env deployment/kube-prober TLS_INSECURE_SKIP_VERIFY=true -n default
-kubectl rollout status deployment/kube-prober -n default --timeout=60s
-
 echo "==> [TLS Expiry] Generating TLS certificate with 5 days validity..."
 TEMP_DIR=$(mktemp -d)
 
-# 1. Test-CA generieren
+# 1. Generate Test-CA
 openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
   -keyout "${TEMP_DIR}/ca.key" \
   -out "${TEMP_DIR}/ca.crt" \
   -subj "/CN=KubeProberTestCA" >/dev/null 2>&1
 
-# 2. Server-Zertifikat mit 5 Tagen Gültigkeit erstellen
+# 2. Server Certificate with 5-day validity
 openssl req -newkey rsa:2048 -nodes \
   -keyout "${TEMP_DIR}/tls.key" \
   -out "${TEMP_DIR}/tls.csr" \
@@ -45,7 +37,7 @@ openssl x509 -req -in "${TEMP_DIR}/tls.csr" \
   -CA "${TEMP_DIR}/ca.crt" -CAkey "${TEMP_DIR}/ca.key" -CAcreateserial \
   -out "${TEMP_DIR}/tls.crt" -days 5 -extfile "${TEMP_DIR}/ext.cnf" >/dev/null 2>&1
 
-# 3. Secret erstellen
+# 3. Create Secret
 kubectl create secret tls tls-expiring-cert \
   --cert="${TEMP_DIR}/tls.crt" \
   --key="${TEMP_DIR}/tls.key" \
@@ -132,6 +124,7 @@ metadata:
 spec:
   address: tls-expiry-server.default.svc.cluster.local:8443
   scheme: tls
+  insecureSkipVerify: true
 EOF
 
 echo "==> Waiting for tls-expiry-server rollout..."

@@ -25,3 +25,5 @@ spec:
                   type: string
                 scheme:
                   type: string
+                insecureSkipVerify:
+                  type: boolean

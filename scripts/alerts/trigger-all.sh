@@ -4,16 +4,16 @@ set -euo pipefail
 ACTION="${1:-apply}"
 
 SCRIPTS=(
-    "trigger-dns.sh"
     "trigger-tls-handshake.sh"
-    "trigger-tls-expiry.sh"
+    "trigger-dns.sh"
+     "trigger-tls-expiry.sh"
     "trigger-tcp.sh"
     "trigger-http.sh"
     "trigger-grpc.sh"
     "trigger-latency.sh"
     "trigger-traffic.sh"
     "trigger-saturation.sh"
-)
+ )
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

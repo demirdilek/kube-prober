@@ -174,14 +174,13 @@ stop-forward: ## Stop background port-forwarding
 argocd-login: forward-all argocd-set-pass ## Login to Argo CD CLI
 	@argocd login localhost:8080 --username admin --insecure
 
-argocd-local-enable: ## Pausing Argo CD auto-sync to avoid ans sync with local changes...
-	@echo "==> Pausing Argo CD auto-sync to avoid ans sync with local changes..."
-	@argocd app set kube-prober --sync-policy none
-	@argocd app sync kube-prober --local ./helm/kube-prober/
+argocd-local-enable: ## Pausing Argo CD auto-sync via kubectl without needing CLI login
+	@echo "==> Pausing Argo CD auto-sync for local testing..."
+	@kubectl patch application $(ARGO_APP) -n $(ARGO_NAMESPACE) --type merge -p '{"spec":{"syncPolicy":null}}' 2>/dev/null || true
 
-argocd-local-disable: ## Re-enable Argo CD auto-sync after local changes are done
+argocd-local-disable: ## Re-enable Argo CD auto-sync via kubectl
 	@echo "==> Re-enabling Argo CD auto-sync..."
-	@argocd app set kube-prober --sync-policy automated
+	@kubectl patch application $(ARGO_APP) -n $(ARGO_NAMESPACE) --type merge -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}' 2>/dev/null || true
 
 argocd-pass: ## Retrieve initial admin password for Argo CD UI
 	@echo "==> Argo CD Initial Admin Password:"

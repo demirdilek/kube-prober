@@ -101,6 +101,7 @@ func parseStaticTarget(u *unstructured.Unstructured) (Target, error) {
 
 	address, _ := spec["address"].(string)
 	scheme, _ := spec["scheme"].(string)
+	insecureSkipVerify, _ := spec["insecureSkipVerify"].(bool) // <-- ADD THIS LINE
 
 	if address == "" || scheme == "" {
 		return Target{}, fmt.Errorf("address or scheme missing in spec")
@@ -112,9 +113,10 @@ func parseStaticTarget(u *unstructured.Unstructured) (Target, error) {
 	}
 
 	return Target{
-		Name:    u.GetName(),
-		Address: address,
-		Scheme:  scheme,
-		Static:  true,
+		Name:               u.GetName(),
+		Address:            address,
+		Scheme:             scheme,
+		Static:             true,
+		InsecureSkipVerify: insecureSkipVerify, // <-- ADD THIS LINE
 	}, nil
 }

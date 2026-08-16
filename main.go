@@ -62,12 +62,7 @@ func main() {
 	tcpProber := prober.NewTCPProber()
 	dispatcher.Register("tcp", tcpProber.ProbeTCPTarget)
 
-	// Configure TLS verification mode via environment variable
 	var tlsCfg *tls.Config
-	if os.Getenv("TLS_INSECURE_SKIP_VERIFY") == "true" {
-		slog.Warn("TLS verification disabled (InsecureSkipVerify=true) - run only in dev/test environments")
-		tlsCfg = &tls.Config{InsecureSkipVerify: true}
-	}
 
 	// Register TLS handlers
 	tlsProber := prober.NewTLSProber(tlsCfg)
