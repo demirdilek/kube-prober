@@ -23,10 +23,11 @@ This document outlines the planned improvements, architectural refinements, and 
   - Add `PodDisruptionBudget` (PDB) and `HorizontalPodAutoscaler` (HPA) manifests to the Helm chart.
 - [X] **Metrics Clean-Up on Target Deletion**
   - Unregister or clean up Prometheus metrics (Gauge/Counter labels) upon target deletion to avoid stale metrics and memory leaks.
+- [X] **CRD-Driven Static Targets & Dynamic Informer (`pkg/prober/statictargets.go`)**
+  - Declarative custom resource definition (`StaticTarget` via `kube-prober.io/v1alpha1`) managed by a dedicated dynamic shared informer.
 - [ ] **CRD Robustness & Schema Validation (`StaticTarget`)**
   - [ ] Add OpenAPI v3 schema validation and CEL (Common Expression Language) rules to reject invalid schemes, malformed hostnames/ports, and out-of-range timeouts during `kubectl apply`.
   - [ ] Support granular per-target configurations in CRD spec (custom HTTP headers, basic auth / bearer tokens, timeout overrides).
-  - [ ] Integrate validating admission webhooks (optional fallback for complex semantic checks).
 
 ---
 
@@ -48,9 +49,9 @@ This document outlines the planned improvements, architectural refinements, and 
   - [X] Add dedicated TLS Certificate Expiry tracking panel (stat/gauge).
   - [X] Add TCP Target Availability & Protocol Error Breakdown panels.
   - [X] Add SLO Error Budget Burn Rate panel based on recording rules.
-- [ ] **Out-of-the-Box SLO & Alerting Package**
-  - [ ] Pre-configure Helm chart templates for PrometheusRules (multi-window error budget burn rates, `TLSCertificateExpiringSoon`, DNS resolution failures).
-  - [ ] Ship Grafana dashboard JSON as auto-loadable ConfigMap in the Helm chart.
+- [X] **Out-of-the-Box SLO & Alerting Package**
+  - [X] Pre-configure Helm chart templates for PrometheusRules (multi-window error budget burn rates, `TLSCertificateExpiringSoon`, DNS resolution failures).
+  - [X] Ship Grafana dashboard JSON as auto-loadable ConfigMap in the Helm chart.
 - [ ] **Extended Probing Capabilities**
   - [ ] Out-of-cluster & external probing (custom DNS resolver per target, egress proxy support).
   - [ ] Synthetic multi-step assertions (HTTP response body regex/JSONPath matching).

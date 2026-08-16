@@ -23,7 +23,7 @@
 
 ## Key Features
 
-- **Event-Driven Target Discovery:** Uses Kubernetes `discoveryv1.EndpointSlice` Informers (filtered by `probe: "true"`) to dynamically discover endpoints without high-overhead API polling.
+- **Dual-Informer Target Discovery:** Automatically streams dynamic endpoints via Kubernetes `discoveryv1.EndpointSlice` informers and declarative static targets from custom resources (`StaticTarget` via `kube-prober.io/v1alpha1`) without API polling overhead.
 - **Multi-Protocol Health Probing:** Native probing handlers for **HTTP/HTTPS**, **TCP**, **TLS** (cert expiry & handshake), **gRPC** (`grpc.health.v1.Health`), and **DNS** (domain resolution and record validation). Protocol schemes and custom parameters are dynamically configurable via Service annotations (`probe/scheme`, `probe/path`).
 - **Multi-Channel Alerting (Slack & Pushover):** Pre-configured Alertmanager routing featuring ChatOps audit trails in Slack and high-priority mobile push notifications via Pushover for `critical` incidents.
 - **Distributed Target Sharding (Rendezvous Hashing):** Scales horizontally with Kubernetes HPA by partitioning target endpoints across prober replicas using Highest Random Weight (HRW) hashing, preventing duplicate probes.
@@ -55,22 +55,26 @@ The probing engine utilizes a robust **Producer-Consumer architecture** using Go
 
 ## Architecture Overview
 
-The `kube-prober` microservice acts as the central observability engine. Using a Kubernetes Informer, it streams target changes directly from the API server into a local, thread-safe memory registry before executing HTTP/DNS probes and exporting 4 Golden Signals telemetry.
+The `kube-prober` microservice acts as the central observability engine. Using a dual-informer architecture, it streams target changes directly from the API server into a thread-safe local memory registry before executing multi-protocol probes and exporting 4 Golden Signals telemetry.
 
 ```text
                                                   +--------------------+
                                                   | Cluster Autoscaler |
                                                   +---------+----------+
                                                             |
-[ K8s Control Plane ]-(EndpointSlice Watch Stream)-> [ kube-prober Informer ]
+                        +--(EndpointSlice Stream)-----------+
+[ K8s Control Plane ]---|                                   v
+   |                    +--(StaticTarget CRD Watch)--> [ Dual Informers ]
    |                                                        |
-   +--(HPA / PDB Supervision)-----------------> (Thread-Safe Local Registry)
+   +--(HPA / PDB Supervision)-----------------> (Thread-Safe Sharded Registry)
+                                                (   Rendezvous Hashing   )
                                                             |
                                              (Concurrent Multi-Protocol Probes)
+                                             ( HTTP | TCP | TLS | gRPC | DNS )
                                                             v
-                                                   [ Target Services ]
+                                                   [ Target Endpoints ]
                                                             |
-                                                   (Prometheus Metrics)
+                                                   (4 Golden Signals)
                                                             v
                                                       [ Prometheus ]
                                                             |
@@ -78,10 +82,9 @@ The `kube-prober` microservice acts as the central observability engine. Using a
                                                             v
                                                       [ Alertmanager ]
                                                             |
-                                                 (Webhooks / Slack / Push)
+                                                 (Slack / Pushover / Pager)
                                                             v
                                                       [ SRE On-Call ]
-```
 
 ---
 
