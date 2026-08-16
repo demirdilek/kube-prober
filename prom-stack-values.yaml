@@ -27,7 +27,7 @@ alertmanager:
       routes:
         # Silence noisy Kubernetes internal watchdog
         - matchers:
-            - alertname = Watchdog
+            - alertname =~ "Watchdog|InfoInhibitor"
           receiver: 'null'
 
         # Critical alerts route to dedicated high-urgency receivers

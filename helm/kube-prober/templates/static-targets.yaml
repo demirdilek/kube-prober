@@ -5,7 +5,7 @@ metadata:
   name: google-public-dns
   namespace: {{ .Release.Namespace }}
 spec:
-  address: 8.8.8.8
+  address: dns://8.8.8.8
   scheme: dns
 ---
 # Validate internal cluster service discovery (East-West)
@@ -15,7 +15,7 @@ metadata:
   name: cluster-internal-dns
   namespace: {{ .Release.Namespace }}
 spec:
-  address: kube-dns.kube-system.svc.cluster.local
+  address: dns://kube-dns.kube-system.svc.cluster.local
   scheme: dns
 ---
 # Validate the Kubernetes Control Plane availability and certificate health
@@ -25,7 +25,7 @@ metadata:
   name: kubernetes-api-server
   namespace: {{ .Release.Namespace }}
 spec:
-  address: kubernetes.default.svc.cluster.local:443
+  address: tls://kubernetes.default.svc.cluster.local:443
   scheme: tls
 ---
 # Validate the internal Ingress Controller routing layer (Traefik is default in k3s)
@@ -35,5 +35,5 @@ metadata:
   name: traefik-ingress-controller
   namespace: {{ .Release.Namespace }}
 spec:
-  address: traefik.kube-system.svc.cluster.local:80
+  address: tcp://traefik.kube-system.svc.cluster.local:80
   scheme: tcp

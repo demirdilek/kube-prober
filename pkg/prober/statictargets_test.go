@@ -72,8 +72,8 @@ func TestWatchStaticTargets(t *testing.T) {
 		if evt.Target.Name != "google-public-dns" {
 			t.Errorf("Expected name 'google-public-dns', got %q", evt.Target.Name)
 		}
-		if evt.Target.Address != "8.8.8.8" {
-			t.Errorf("Expected address '8.8.8.8', got %q", evt.Target.Address)
+		if evt.Target.Address != "dns://8.8.8.8" {
+			t.Errorf("Expected address 'dns://8.8.8.8', got %q", evt.Target.Address)
 		}
 		if evt.Target.Scheme != "dns" {
 			t.Errorf("Expected scheme 'dns', got %q", evt.Target.Scheme)
@@ -97,8 +97,8 @@ func TestWatchStaticTargets(t *testing.T) {
 		if evt.IsAdded {
 			t.Errorf("Expected IsAdded=false on deletion, got true")
 		}
-		if evt.Target.Address != "8.8.8.8" {
-			t.Errorf("Expected removed address '8.8.8.8', got %q", evt.Target.Address)
+		if evt.Target.Address != "dns://8.8.8.8" {
+			t.Errorf("Expected removed address 'dns://8.8.8.8', got %q", evt.Target.Address)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Timeout waiting for StaticTarget Delete event")

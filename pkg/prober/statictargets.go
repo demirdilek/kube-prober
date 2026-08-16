@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -103,6 +104,11 @@ func parseStaticTarget(u *unstructured.Unstructured) (Target, error) {
 
 	if address == "" || scheme == "" {
 		return Target{}, fmt.Errorf("address or scheme missing in spec")
+	}
+
+	// Ensure uniform scheme prefix across metrics and dashboard queries
+	if !strings.Contains(address, "://") {
+		address = fmt.Sprintf("%s://%s", scheme, address)
 	}
 
 	return Target{
