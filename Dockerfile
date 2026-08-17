@@ -1,30 +1,32 @@
 # ---------------------------------------------------
 # Stage 1: Build environment
 # ---------------------------------------------------
-FROM golang:alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /app
 
 # Install CA certificates for outgoing HTTPS requests
 RUN apk add --no-cache ca-certificates
 
-# 1. First copy only dependencies to cache them efficiently
+# 1. Cache dependencies
 COPY go.mod go.sum ./
-# Cache dependencies and Go build cache across builds
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go mod download
 
-# 2. Finally copy the actual source code
+# 2. Copy source code
 COPY . .
 
-# Build statically compiled and stripped binary
+# Build statically compiled and stripped binary matching target architecture
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o kube-prober .
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o kube-prober .
 
 # ---------------------------------------------------
-# Stage 2: Minimal runtime image (~18 MB)
+# Stage 2: Minimal runtime image
 # ---------------------------------------------------
 FROM scratch
 
