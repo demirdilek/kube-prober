@@ -38,6 +38,7 @@ prometheus-data/
 prom-stack-values.local.yaml
 tls.key
 tls.crt
+docs/reddit
 
 # ==========================================
 # Editors & IDEs
