@@ -43,7 +43,7 @@ func ProbeTarget(ctx context.Context, target Target, dispatcher *Dispatcher) {
 	}
 }
 
-// WorkerPool processes incoming probe jobs.
+// WorkerPool processes incoming probe jobs until the channel is closed or context is cancelled.
 func WorkerPool(ctx context.Context, jobs <-chan Job, dispatcher *Dispatcher, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for {
@@ -52,6 +52,7 @@ func WorkerPool(ctx context.Context, jobs <-chan Job, dispatcher *Dispatcher, wg
 			return
 		case job, ok := <-jobs:
 			if !ok {
+				// Channel closed and drained
 				return
 			}
 			ProbeTarget(ctx, job.Target, dispatcher)

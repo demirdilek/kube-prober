@@ -5,45 +5,52 @@ import (
 	"hash/fnv"
 	"log/slog"
 	"sync"
+	"time"
 
 	discoveryv1 "k8s.io/api/discovery/v1"
 )
 
-// Registry holds the state of all discovered targets.
+// Registry manages the in-memory state of all discovered targets (both dynamic and static).
+// It implements Rendezvous Hashing (Highest Random Weight) to ensure deterministic target
+// sharding across prober replicas without requiring inter-pod coordination.
 type Registry struct {
 	mu            sync.RWMutex
-	targets       map[string]Target
-	sliceTargets  map[string][]string
-	clusterPodIPs []string
-	selfPodIP     string
-	active        map[string]bool
-	Events        chan TargetEvent
+	targets       map[string]Target   // Canonical map of all monitored targets keyed by address
+	sliceTargets  map[string][]string // Maps an EndpointSlice key (namespace/name) to its generated target addresses
+	clusterPodIPs []string            // Current active list of prober pod IPs used for sharding evaluation
+	selfPodIP     string              // Local pod IP used to claim target ownership
+	active        map[string]bool     // Tracks whether this specific replica is currently probing a target
+	Events        chan TargetEvent    // Buffered event stream consumed by the scheduler event loop in main.go
 }
 
-// NewRegistry initializes a new Registry.
+// NewRegistry instantiates a thread-safe Registry with pre-allocated tracking structures.
 func NewRegistry(selfPodIP string) *Registry {
 	return &Registry{
 		targets:      make(map[string]Target),
 		sliceTargets: make(map[string][]string),
 		active:       make(map[string]bool),
 		selfPodIP:    selfPodIP,
-		Events:       make(chan TargetEvent, 1000),
+		Events:       make(chan TargetEvent, 1000), // Sized buffer to absorb bursty Kubernetes watch events
 	}
 }
 
-// hashTargetAndPod creates a deterministic hash for Rendezvous Hashing.
+// hashTargetAndPod computes a deterministic 64-bit FNV-1a hash for a given (target, podIP) pair.
+// A null-byte delimiter is injected between strings to prevent hash collision vulnerabilities
+// caused by boundary ambiguities (e.g., "ab" + "cd" vs "a" + "bcd").
 func hashTargetAndPod(target, podIP string) uint64 {
-	// Use a null-byte separator to prevent string concatenation collisions
 	key := target + "\x00" + podIP
 	h := fnv.New64a()
 	h.Write([]byte(key))
 	return h.Sum64()
 }
 
-// shouldProcessTargetLocked checks if this replica should process the target.
-// The caller MUST hold r.mu (Lock or RLock) before calling this function.
-// ShouldProcessTarget is the safe, exported version for external calls.
+// shouldProcessTargetLocked evaluates whether the local replica owns the given target.
+// It iterates across all active peer IPs, finds the pod with the highest hash weight,
+// and returns true if the winning pod matches selfPodIP.
+//
+// Precondition: Caller MUST acquire at least a read lock (r.mu.RLock) before invoking this.
 func (r *Registry) shouldProcessTargetLocked(target string) bool {
+	// If the pod IP is not configured or there are no peers, fall back to processing all targets locally.
 	if r.selfPodIP == "" || len(r.clusterPodIPs) == 0 {
 		return true
 	}
@@ -53,7 +60,7 @@ func (r *Registry) shouldProcessTargetLocked(target string) bool {
 
 	for i, podIP := range r.clusterPodIPs {
 		h := hashTargetAndPod(target, podIP)
-		// CRITICAL FIX: Force initialization on the first iteration
+		// Force assignment on the first iteration to guarantee a valid candidate even if hash is 0
 		if i == 0 || h > highestHash {
 			highestHash = h
 			selectedPod = podIP
@@ -62,7 +69,6 @@ func (r *Registry) shouldProcessTargetLocked(target string) bool {
 
 	isOwner := selectedPod == r.selfPodIP
 
-	// DEBUG: Log the sharding decision and the current state of cluster IPs
 	slog.Debug(
 		"Sharding evaluation",
 		"target", target,
@@ -76,15 +82,39 @@ func (r *Registry) shouldProcessTargetLocked(target string) bool {
 	return isOwner
 }
 
-// ShouldProcessTarget checks if this replica should process the target.
-// This is the safe, exported version for external calls.
+// ShouldProcessTarget provides thread-safe external access to evaluate target ownership.
 func (r *Registry) ShouldProcessTarget(targetAddress string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.shouldProcessTargetLocked(targetAddress)
 }
 
-// UpdatePeers updates the list of active prober pods and rebalances targets.
+// emitEvent safely pushes a TargetEvent to the internal Events channel.
+// Critical removal/stop events (IsAdded: false) are guaranteed delivery via a bounded timeout
+// to prevent scheduler leaks and zombie metrics. Transient add events use non-blocking dispatch
+// to maintain controller responsiveness under event channel saturation.
+func (r *Registry) emitEvent(evt TargetEvent) {
+	if !evt.IsAdded {
+		// Removal events must be delivered to cancel goroutines and purge metrics
+		select {
+		case r.Events <- evt:
+		case <-time.After(2 * time.Second):
+			slog.Error("Critical: Failed to deliver target removal event within timeout", "target", evt.Target.Address)
+		}
+		return
+	}
+
+	// Add events drop non-blockingly if channel is saturated; subsequent sync cycles will recover state
+	select {
+	case r.Events <- evt:
+	default:
+		slog.Warn("Registry events channel full, skipping transient add event", "target", evt.Target.Address)
+	}
+}
+
+// UpdatePeers synchronizes the active prober replica topology and triggers target rebalancing.
+// When prober pods scale up or down (e.g., via HPA), target ownership is recomputed
+// and respective Add/Remove events are queued.
 func (r *Registry) UpdatePeers(peers []string) {
 	var eventsToSend []TargetEvent
 
@@ -94,19 +124,20 @@ func (r *Registry) UpdatePeers(peers []string) {
 
 		r.clusterPodIPs = peers
 
-		// Re-evaluate ownership for every known target
+		// Re-evaluate Rendezvous Hashing ownership for every registered endpoint
 		for address, target := range r.targets {
-
 			shouldProcess := r.shouldProcessTargetLocked(address)
 			isCurrentlyProcessing := r.active[address]
 
 			if shouldProcess && !isCurrentlyProcessing {
+				// Target gained: mark active and emit start event
 				r.active[address] = true
 				eventsToSend = append(eventsToSend, TargetEvent{
 					Target:  target,
 					IsAdded: true,
 				})
 			} else if !shouldProcess && isCurrentlyProcessing {
+				// Target lost to another peer: mark inactive and emit stop event
 				r.active[address] = false
 				eventsToSend = append(eventsToSend, TargetEvent{
 					Target:  target,
@@ -115,16 +146,15 @@ func (r *Registry) UpdatePeers(peers []string) {
 			}
 		}
 	}()
+
 	for _, evt := range eventsToSend {
-		select {
-		case r.Events <- evt:
-		default:
-			slog.Warn("Registry events channel full, dropping event to prevent deadlock", "target", evt.Target.Address)
-		}
+		r.emitEvent(evt)
 	}
 }
 
-// UpdateFromEndpointSlice synchronizes the targets for a given EndpointSlice.
+// UpdateFromEndpointSlice reconciles endpoints discovered dynamically from Kubernetes EndpointSlices.
+// It parses ready pod addresses, filters duplicates, respects CRD static target precedence,
+// and emits lifecycle events for newly acquired or decommissioned endpoints.
 func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, scheme, path string) {
 	var eventsToSend []TargetEvent
 
@@ -136,7 +166,7 @@ func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, sch
 		newTargetMap := make(map[string]bool)
 		var newTargetList []string
 
-		// Fallback to port 80 if the EndpointSlice defines no ports
+		// Extract available service ports or fall back to default HTTP port 80
 		var activePorts []int32
 		if len(slice.Ports) == 0 {
 			activePorts = append(activePorts, 80)
@@ -148,6 +178,7 @@ func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, sch
 			}
 		}
 
+		// Construct formatted URLs for ready endpoints
 		for _, ep := range slice.Endpoints {
 			if ep.Conditions.Ready == nil || !*ep.Conditions.Ready {
 				continue
@@ -161,27 +192,34 @@ func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, sch
 			}
 		}
 
-		// Remove old targets
+		// Phase 1: Clean up endpoints that disappeared from this specific EndpointSlice
 		oldTargets := r.sliceTargets[sliceKey]
 		for _, oldAddress := range oldTargets {
 			if !newTargetMap[oldAddress] {
-				delete(r.targets, oldAddress)
+				// Only delete dynamic endpoints; never purge static targets defined via CRD
+				if existing, exists := r.targets[oldAddress]; exists && !existing.Static {
+					delete(r.targets, oldAddress)
 
-				// CRITICAL FIX: Only send a stop event if we actually processed it
-				wasActive := r.active[oldAddress]
-				delete(r.active, oldAddress)
+					wasActive := r.active[oldAddress]
+					delete(r.active, oldAddress)
 
-				if wasActive {
-					eventsToSend = append(eventsToSend, TargetEvent{
-						Target:  Target{Address: oldAddress},
-						IsAdded: false,
-					})
+					if wasActive {
+						eventsToSend = append(eventsToSend, TargetEvent{
+							Target:  Target{Address: oldAddress},
+							IsAdded: false,
+						})
+					}
 				}
 			}
 		}
 
-		// Add new targets
+		// Phase 2: Register new dynamic endpoints (skipping existing static CRD targets)
 		for _, newAddress := range newTargetList {
+			if existing, exists := r.targets[newAddress]; exists && existing.Static {
+				// Static targets take precedence over dynamic discovery
+				continue
+			}
+
 			if _, exists := r.targets[newAddress]; !exists {
 				fullTarget := Target{
 					Name:    sliceKey,
@@ -191,6 +229,7 @@ func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, sch
 				}
 				r.targets[newAddress] = fullTarget
 
+				// If this replica owns the newly discovered target, schedule it
 				if r.shouldProcessTargetLocked(newAddress) {
 					r.active[newAddress] = true
 					eventsToSend = append(eventsToSend, TargetEvent{
@@ -205,15 +244,11 @@ func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, sch
 	}()
 
 	for _, evt := range eventsToSend {
-		select {
-		case r.Events <- evt:
-		default:
-			slog.Warn("Registry events channel full, dropping event to prevent deadlock", "target", evt.Target.Address)
-		}
+		r.emitEvent(evt)
 	}
 }
 
-// RemoveEndpointSlice completely removes all targets associated with a given EndpointSlice.
+// RemoveEndpointSlice unregisters all dynamic targets associated with a deleted EndpointSlice resource.
 func (r *Registry) RemoveEndpointSlice(slice *discoveryv1.EndpointSlice, scheme, path string) {
 	var eventsToSend []TargetEvent
 
@@ -225,27 +260,33 @@ func (r *Registry) RemoveEndpointSlice(slice *discoveryv1.EndpointSlice, scheme,
 		oldTargets := r.sliceTargets[sliceKey]
 
 		for _, oldAddress := range oldTargets {
+			// Retain targets that are backed by a static CRD definition
+			if existing, exists := r.targets[oldAddress]; exists && existing.Static {
+				continue
+			}
+
 			delete(r.targets, oldAddress)
+			wasActive := r.active[oldAddress]
 			delete(r.active, oldAddress)
-			eventsToSend = append(eventsToSend, TargetEvent{
-				Target:  Target{Address: oldAddress},
-				IsAdded: false,
-			})
+
+			if wasActive {
+				eventsToSend = append(eventsToSend, TargetEvent{
+					Target:  Target{Address: oldAddress},
+					IsAdded: false,
+				})
+			}
 		}
 
 		delete(r.sliceTargets, sliceKey)
 	}()
 
 	for _, evt := range eventsToSend {
-		select {
-		case r.Events <- evt:
-		default:
-			slog.Warn("Registry events channel full, dropping event to prevent deadlock", "target", evt.Target.Address)
-		}
+		r.emitEvent(evt)
 	}
 }
 
-// Add manually registers a single static target.
+// Add registers a declarative static target from CRD definitions.
+// Static targets are given top precedence and will overwrite existing dynamic targets.
 func (r *Registry) Add(target Target) {
 	var eventToSend *TargetEvent
 
@@ -253,7 +294,11 @@ func (r *Registry) Add(target Target) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 
-		if _, exists := r.targets[target.Address]; !exists {
+		target.Static = true
+		existing, exists := r.targets[target.Address]
+
+		// Insert or upgrade dynamic target to static
+		if !exists || !existing.Static {
 			r.targets[target.Address] = target
 
 			if r.shouldProcessTargetLocked(target.Address) {
@@ -267,15 +312,11 @@ func (r *Registry) Add(target Target) {
 	}()
 
 	if eventToSend != nil {
-		select {
-		case r.Events <- *eventToSend:
-		default:
-			slog.Warn("Registry events channel full, dropping or delayed event", "target", target.Address)
-		}
+		r.emitEvent(*eventToSend)
 	}
 }
 
-// Remove deletes a target by address and emits a removal event
+// Remove unregisters a target by its address and emits a removal event if currently active.
 func (r *Registry) Remove(address string) {
 	var eventToSend *TargetEvent
 
@@ -298,10 +339,6 @@ func (r *Registry) Remove(address string) {
 	}()
 
 	if eventToSend != nil {
-		select {
-		case r.Events <- *eventToSend:
-		default:
-			slog.Warn("Registry events channel full, dropping or delayed event", "target", address)
-		}
+		r.emitEvent(*eventToSend)
 	}
 }

@@ -210,13 +210,22 @@ The setup allows you to simulate threshold violations for different Golden Signa
 | Alert Scenario | Description / Target | Trigger Command |
 | :--- | :--- | :--- |
 | **High Latency** | Injects 2s delay (`/delay/2`) to breach p99 latency | `make test-alert-latency` |
-| **High Error Rate** | Deploys HTTP 500 internal server error target | `make test-alert-error` |
+| **High Error Rate** | Deploys HTTP 500 internal server error target | `make test-alert-http` |
 | **Traffic Collapse** | Simulates transport outage via misrouted service port | `make test-alert-traffic` |
 | **Worker Saturation** | Drossels worker pool (`WORKERS=2`) under heavy load | `make test-alert-saturation` |
 | **TCP Connection Refused** | Targets dead port (Layer 4 failure) | `make test-alert-tcp` |
-| **TLS Cert Expiry / Handshake** | Deploys expiring self-signed certificate | `make test-alert-tls-expiry` |
+| **TLS Cert Expiry** | Deploys expiring self-signed certificate | `make test-alert-tls-expiry` |
+| **TLS Handshake Failure** | Triggers TLS handshake alert by deploying an expired self-signed certificate. | `make test-alert-tls-handshake` |
 | **gRPC Service Failure** | Targets gRPC endpoint without `grpc.health.v1` | `make test-alert-grpc` |
 | **DNS Resolution Failure** | Targets a fake domain to simulate DNS resolution failure[cite: 1] | `make test-alert-dns` |
+
+#### All
+
+To fire all alerts at once
+
+```bash
+make test-alert-all
+```
 
 #### 🧹 Cleanup
 
@@ -238,6 +247,5 @@ make test-alert-clean
 
 The project is continually evolving towards enterprise readiness. View the full [ROADMAP.md](ROADMAP.md) for details. Upcoming milestones include:
 
-- **Protocol Expansion**: Further support for DNS resolution checks.
 - **Chaos Engineering Suites**: Automated resilience testing.
 - **Multi-Tenancy & Tenant Isolation**: SaaS-ready architectural boundaries.

@@ -5,7 +5,7 @@ import (
 )
 
 var (
-	// Latency measures probing duration in seconds per target.
+	// Latency measures probing duration in seconds per target endpoint.
 	LatencyHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name: "kube_prober_latency_seconds",
@@ -14,7 +14,7 @@ var (
 		[]string{"target"},
 	)
 
-	// Traffic tracks the total number of probe requests sent per target.
+	// Traffic tracks the total cumulative count of health-check probes sent per target.
 	TrafficCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kube_prober_traffic_total",
@@ -23,7 +23,7 @@ var (
 		[]string{"target"},
 	)
 
-	// Errors tracks failed probes categorized by target and error category.
+	// Errors tracks failed probes categorized by target address and SRE error category.
 	ErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kube_prober_errors_total",
@@ -40,7 +40,7 @@ var (
 		},
 	)
 
-	// Max workers capacity metric (Saturation capacity)
+	// MaxWorkersGauge represents the maximum configured worker goroutine pool limit.
 	MaxWorkersGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "kube_prober_saturation_max_workers",
@@ -48,7 +48,7 @@ var (
 		},
 	)
 
-	// CategoryHintInfo exposes troubleshooting hints per category as a static info metric.
+	// CategoryHintInfo exposes static troubleshooting hints per category as an info metric.
 	CategoryHintInfo = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "kube_prober_error_category_hint_info",
@@ -57,7 +57,7 @@ var (
 		[]string{"category", "hint"},
 	)
 
-	// TLSCertExpiryGauge tracks the remaining days until the TLS certificate expires.
+	// TLSCertExpiryGauge tracks the remaining days until the target TLS certificate expires.
 	TLSCertExpiryGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "kube_prober_tls_cert_expiry_days",
@@ -67,7 +67,7 @@ var (
 	)
 )
 
-// List of all active error categories for hint exposure and label cleanup.
+// allCategories defines the complete list of registered SRE error categories.
 var allCategories = []ErrorCategory{
 	CategoryDNS,
 	CategoryConnectionRefused,
@@ -93,19 +93,21 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		TLSCertExpiryGauge,
 	)
 
-	// Expose static hint metrics for all registered categories
+	// Pre-populate static troubleshooting hints for Prometheus info metrics
 	for _, cat := range allCategories {
 		CategoryHintInfo.WithLabelValues(string(cat), cat.Hint()).Set(1)
 	}
 }
 
-// DeleteTargetMetrics removes Prometheus metric entries for a deleted target to prevent memory leaks.
+// DeleteTargetMetrics cleans up all time-series vectors associated with a deleted target
+// to avoid Prometheus TSDB cardinality bloat and memory leaks.
 func DeleteTargetMetrics(target string) {
+	// 1. Delete single-label target metrics
 	LatencyHistogram.DeleteLabelValues(target)
 	TrafficCounter.DeleteLabelValues(target)
 	TLSCertExpiryGauge.DeleteLabelValues(target)
 
-	// Clean up all error categories for this target
+	// 2. Delete all error category variations for this specific target
 	for _, cat := range allCategories {
 		ErrorCounter.DeleteLabelValues(target, string(cat))
 	}

@@ -218,3 +218,71 @@ func TestRegistry_ConcurrencySafety(t *testing.T) {
 	wg.Wait()
 	// If the test reaches here without panicking or triggering `-race`, the mutex handling is solid.
 }
+
+func TestRegistry_StaticTargetPrecedence(t *testing.T) {
+	reg := NewRegistry("10.0.0.1")
+
+	staticTarget := Target{
+		Address: "tls://kubernetes.default.svc.cluster.local:443",
+		Scheme:  "tls",
+		Static:  true,
+	}
+	reg.Add(staticTarget)
+
+	// Consume initial event
+	<-reg.Events
+
+	// Simulate discovery of the same endpoint via EndpointSlice
+	port := int32(443)
+	ready := true
+	slice := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{Name: "kubernetes", Namespace: "default"},
+		Ports:      []discoveryv1.EndpointPort{{Port: &port}},
+		Endpoints: []discoveryv1.Endpoint{
+			{
+				Addresses:  []string{"kubernetes.default.svc.cluster.local"},
+				Conditions: discoveryv1.EndpointConditions{Ready: &ready},
+			},
+		},
+	}
+
+	reg.UpdateFromEndpointSlice(slice, "tls", "")
+
+	// Assert no duplicate event was queued
+	select {
+	case evt := <-reg.Events:
+		t.Fatalf("unexpected event for duplicate static target: %+v", evt)
+	default:
+		// Expected: duplicate ignored
+	}
+}
+
+func TestRegistry_DynamicOverwrittenByStatic(t *testing.T) {
+	reg := NewRegistry("10.0.0.1")
+
+	// 1. Add dynamic target first
+	dynTarget := Target{
+		Address: "http://192.168.1.50:80",
+		Scheme:  "http",
+		Static:  false,
+	}
+	// Simulate adding via internal map or mock slice update
+	reg.targets[dynTarget.Address] = dynTarget
+
+	// 2. Now add static CRD with same address
+	staticTarget := Target{
+		Address: "http://192.168.1.50:80",
+		Scheme:  "http",
+		Static:  true,
+	}
+	reg.Add(staticTarget)
+
+	// 3. Verify it is now marked as static in the registry
+	reg.mu.RLock()
+	stored, exists := reg.targets[staticTarget.Address]
+	reg.mu.RUnlock()
+
+	if !exists || !stored.Static {
+		t.Errorf("Expected dynamic target to be overwritten and marked as static, got: %+v", stored)
+	}
+}

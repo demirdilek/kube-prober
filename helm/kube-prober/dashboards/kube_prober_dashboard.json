@@ -154,7 +154,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
       "targets": [
         {
-          "expr": "(sum(kube_prober_saturation_active_workers) / clamp_min(max(kube_prober_saturation_max_workers), 1)) * 100",
+          "expr": "(sum(kube_prober_saturation_active_workers) / clamp_min(sum(kube_prober_saturation_max_workers), 1)) * 100",
           "legendFormat": "Worker Pool Saturation"
         }
       ],
@@ -177,7 +177,8 @@
       "targets": [
         {
           "expr": "kube_prober_tls_cert_expiry_days",
-          "legendFormat": "{{target}}"
+          "instant": true,
+          "legendFormat": "{{name}}{{^name}}{{target}}{{/name}}"
         }
       ],
       "fieldConfig": {
@@ -222,7 +223,7 @@
       }
     }
   ],
-  "refresh": "5s",
+  "refresh": "30s",
   "schemaVersion": 38,
   "style": "dark",
   "tags": ["sre", "network", "golden-signals"],

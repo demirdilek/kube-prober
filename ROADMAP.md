@@ -23,8 +23,8 @@ This document outlines the planned improvements, architectural refinements, and 
   - Add `PodDisruptionBudget` (PDB) and `HorizontalPodAutoscaler` (HPA) manifests to the Helm chart.
 - [X] **Metrics Clean-Up on Target Deletion**
   - Unregister or clean up Prometheus metrics (Gauge/Counter labels) upon target deletion to avoid stale metrics and memory leaks.
-- [X] **CRD-Driven Static Targets & Dynamic Informer (`pkg/prober/statictargets.go`)**
-  - Declarative custom resource definition (`StaticTarget` via `kube-prober.io/v1alpha1`) managed by a dedicated dynamic shared informer.
+- [X] **Dual-Informer Discovery & StaticTarget CRDs (`pkg/prober/statictargets.go`, ADR 0023)**
+  - Dedicated dynamic shared informer for declarative `StaticTarget` Custom Resources (`kube-prober.io/v1alpha1`) running concurrently with the EndpointSlice informer.
 - [ ] **CRD Robustness & Schema Validation (`StaticTarget`)**
   - [ ] Add OpenAPI v3 schema validation and CEL (Common Expression Language) rules to reject invalid schemes, malformed hostnames/ports, and out-of-range timeouts during `kubectl apply`.
   - [ ] Support granular per-target configurations in CRD spec (custom HTTP headers, basic auth / bearer tokens, timeout overrides).

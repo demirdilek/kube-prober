@@ -20,25 +20,27 @@ import (
 	"github.com/demirdilek/kube-prober/pkg/server"
 )
 
+// init registers all core SRE metrics with the Prometheus default registry.
 func init() {
 	prober.RegisterMetrics(prometheus.DefaultRegisterer)
 }
 
 func main() {
-	// Setup graceful shutdown context listening for SIGINT and SIGTERM OS signals
+	// Setup structured JSON logging to stdout for cloud-native log ingestion
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
+	// Listen for OS interrupt and SIGTERM signals to initiate a graceful shutdown
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-
-	// Configure worker pool capacity and HTTP client options for heavy concurrent probing
+	// Load runtime parameters from environment variables with sensible production defaults
 	numWorkers := env.GetInt("WORKERS", 50)
 	prober.MaxWorkersGauge.Set(float64(numWorkers))
 	jobQueueSize := env.GetInt("QUEUE_SIZE", 10000)
 	probeInterval := time.Duration(env.GetInt("PROBE_INTERVAL_SECONDS", 2)) * time.Second
 	httpTimeout := time.Duration(env.GetInt("HTTP_TIMEOUT_SECONDS", 5)) * time.Second
 
-	// Pre-configure HTTP transport with aggressive connection pooling for high-throughput reuse
+	// Pre-configure HTTP transport with aggressive connection pooling to prevent socket exhaustion
 	httpClient := &http.Client{
 		Timeout: httpTimeout,
 		Transport: &http.Transport{
@@ -48,83 +50,86 @@ func main() {
 		},
 	}
 
-	// Initialize the Dispatcher
+	// Initialize protocol dispatcher and register respective health-check handlers
 	dispatcher := prober.NewDispatcher()
 
-	// Register HTTP handlers
-	// Note: Ensure your `NewHTTPProber` function signature in http.go accepts `*http.Client`
-	// so it can use this highly-tuned client!
+	// Register HTTP/HTTPS handlers
 	httpProber := prober.NewHTTPProber(httpClient)
 	dispatcher.Register("http", httpProber.ProbeHTTPTarget)
 	dispatcher.Register("https", httpProber.ProbeHTTPTarget)
 
-	// Register TCP handlers
+	// Register TCP Layer 4 handler
 	tcpProber := prober.NewTCPProber()
 	dispatcher.Register("tcp", tcpProber.ProbeTCPTarget)
 
+	// Register TLS handshake and certificate expiry validation handler
 	var tlsCfg *tls.Config
-
-	// Register TLS handlers
 	tlsProber := prober.NewTLSProber(tlsCfg)
 	dispatcher.Register("tls", tlsProber.ProbeTLSTarget)
 
-	// Register gRPC handlers
-	// (Using the modernized NewGRPCProber we built that defaults to insecure credentials)
+	// Register gRPC Health Checking protocol handler
 	grpcProber := prober.NewGRPCProber()
 	dispatcher.Register("grpc", grpcProber.ProbeGRPCTarget)
 
-	// Register DNS handlers
+	// Register DNS hostname resolution handler
 	dnsProber := prober.NewDNSProber()
 	dispatcher.Register("dns", dnsProber.ProbeDNSTarget)
 
-	var wg sync.WaitGroup
+	// Separate WaitGroups for producers (schedulers) and consumers (worker pool)
+	// to prevent deadlocks during coordinated graceful termination
+	var workerWG sync.WaitGroup
+	var schedulerWG sync.WaitGroup
 	jobs := make(chan prober.Job, jobQueueSize)
 
-	// Spawn worker pool goroutines to process incoming probe jobs concurrently
+	// Spawn the worker pool goroutines to process incoming probe jobs concurrently
 	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go prober.WorkerPool(ctx, jobs, dispatcher, &wg)
+		workerWG.Add(1)
+		go prober.WorkerPool(ctx, jobs, dispatcher, &workerWG)
 	}
 
+	// Initialize standard Kubernetes Clientset for service discovery and peer tracking
 	clientset, err := kube.InitClient()
 	if err != nil {
 		slog.Error("Initialization failed for clientset", "error", err)
 		os.Exit(1)
 	}
 
+	// Initialize dynamic client for custom resource definitions (StaticTarget CRDs)
 	dynClient, err := kube.InitDynamicClient()
 	if err != nil {
 		slog.Error("Initialization failed for dynamic client", "error", err)
 		os.Exit(1)
 	}
 
+	// Initialize the sharded target registry using the local pod IP (Downward API)
 	selfIP := os.Getenv("POD_IP")
 	registry := prober.NewRegistry(selfIP)
 
-	// Start CRD Watcher Informer in background
+	// Start watching StaticTarget CRDs in the background
 	go func() {
 		if err := prober.WatchStaticTargets(ctx, dynClient, registry); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("StaticTargets informer stopped", "error", err)
 		}
 	}()
 
-	// Initialize the unified KubeWatcher for both peer topology and target discovery
+	// Initialize the unified KubeWatcher for EndpointSlices and peer topology
 	watcher := prober.NewKubeWatcher(clientset, registry)
 
-	// 1. Watch peer replicas dynamically to rebalance targets upon HPA scaling events
+	// 1. Continuously watch prober peer replicas to rebalance targets upon HPA scaling events
 	go watcher.WatchPeers(ctx)
 
-	// 2. Start the EndpointSlice informer in a background goroutine to stream target updates asynchronously
+	// 2. Start the EndpointSlice informer to dynamically discover annotated service endpoints
 	go func() {
 		if err := watcher.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("Informer watcher stopped", "error", err)
 		}
 	}()
 
+	// Track active per-target scheduler cancellation functions
 	activeSchedulers := make(map[string]context.CancelFunc)
 	var schedMu sync.Mutex
 
-	// Event loop: process target assignments emitted by the sharding registry
+	// Event loop: handle target additions, rebalancing decisions, and removals from the registry
 	go func() {
 		for {
 			select {
@@ -140,33 +145,30 @@ func main() {
 					defer schedMu.Unlock()
 
 					if evt.IsAdded {
-						// Target assigned to this replica: start local periodic probe scheduler
+						// Target assigned to this replica: start a local periodic probe scheduler
 						if _, exists := activeSchedulers[evt.Target.Address]; !exists {
 							slog.Info("New target discovered", "target", evt.Target.Address, "scheme", evt.Target.Scheme)
 							schedCtx, schedCancel := context.WithCancel(ctx)
 							activeSchedulers[evt.Target.Address] = schedCancel
 
-							wg.Add(1)
-							go prober.TargetScheduler(schedCtx, evt.Target, jobs, probeInterval, &wg)
+							// Track the scheduler lifecycle via schedulerWG
+							schedulerWG.Add(1)
+							go prober.TargetScheduler(schedCtx, evt.Target, jobs, probeInterval, &schedulerWG)
 						}
 					} else {
-						// Target revoked or deleted: cancel local scheduler and purge metrics
+						// Target revoked or deleted: stop the scheduler and schedule metric cleanup
 						if cancelFunc, exists := activeSchedulers[evt.Target.Address]; exists {
 							slog.Info("Target removed", "target", evt.Target.Address)
 							cancelFunc()
 							delete(activeSchedulers, evt.Target.Address)
 
-							// Clean up all metrics associated with the removed target safely
+							// Purge stale Prometheus metrics after waiting for final scraper collection
 							go func(targetAddr string) {
-								// Wait for Prometheus to scrape the final state
 								time.Sleep(6 * time.Second)
-
-								// Lock the scheduler mutex to safely check the map
 								schedMu.Lock()
 								_, reAdded := activeSchedulers[targetAddr]
 								schedMu.Unlock()
 
-								// Only delete metrics if the target hasn't been re-added in the meantime
 								if !reAdded {
 									prober.DeleteTargetMetrics(targetAddr)
 									slog.Debug("Metrics purged for removed target", "target", targetAddr)
@@ -179,26 +181,33 @@ func main() {
 		}
 	}()
 
-	// Start the HTTP server to expose metrics and health endpoints
+	// Start the internal HTTP server to expose Prometheus metrics and health probes (:8080)
 	srv := server.New(":8080")
 	go srv.Start()
 
-	// Wait for shutdown signal
+	// Block main routine until an OS termination signal is received
 	<-ctx.Done()
 	slog.Info("Shutting down cleanly...")
 
-	// 1. Cancel all active schedulers to stop periodic probing
+	// Phase 1: Stop all active target schedulers to prevent new job generation
 	schedMu.Lock()
 	for _, cancelFn := range activeSchedulers {
 		cancelFn()
 	}
 	schedMu.Unlock()
 
-	// 2. Close the job queue to signal workers to exit
+	// Phase 2: Wait until all scheduler loops have exited completely
+	schedulerWG.Wait()
+
+	// Phase 3: Close the job channel; workers will finish remaining buffered jobs and exit
+	close(jobs)
+
+	// Phase 4: Gracefully stop the HTTP server allowing in-flight scrapes to complete
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
-
 	_ = srv.Shutdown(shutdownCtx)
-	wg.Wait()
+
+	// Phase 5: Wait for all worker goroutines to drain the channel and finish
+	workerWG.Wait()
 	slog.Info("Goodbye.")
 }

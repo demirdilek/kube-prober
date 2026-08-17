@@ -68,7 +68,7 @@ kubectl delete secret tls-expiring-cert -n default --ignore-not-found
 # 6. Fallback: Deployment-Umgebungsvariablen (Workers & TLS-Check) auf Standard zurücksetzen
 if kubectl get deployment kube-prober -n default >/dev/null 2>&1; then
     echo "==> Restoring prober deployment environment defaults..."
-    kubectl set env deployment/kube-prober WORKERS=50 TLS_INSECURE_SKIP_VERIFY=false -n default >/dev/null 2>&1 || true
+    kubectl set env deployment/kube-prober WORKERS=50 -n default >/dev/null 2>&1 || true
 fi
 
 echo "==> All test targets, pods, and services removed. Metrics will normalize shortly."
