@@ -1,7 +1,7 @@
 # ---------------------------------------------------
 # Stage 1: Build environment
 # ---------------------------------------------------
-FROM --platform=$BUILDPLATFORM golang:alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
