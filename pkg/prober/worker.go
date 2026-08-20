@@ -72,6 +72,8 @@ func TargetScheduler(ctx context.Context, target Target, jobs chan<- Job, interv
 	case jobs <- Job{Target: target}:
 	case <-ctx.Done():
 		return
+	default:
+		// Queue full: skip immediate probe and wait for next interval tick
 	}
 
 	for {
@@ -83,6 +85,8 @@ func TargetScheduler(ctx context.Context, target Target, jobs chan<- Job, interv
 			case jobs <- Job{Target: target}:
 			case <-ctx.Done():
 				return
+			default:
+				// Queue full: skip immediate probe and wait for next interval tick
 			}
 		}
 	}

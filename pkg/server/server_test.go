@@ -4,21 +4,18 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 )
 
-// English comments as requested
-
 func TestServer_EndpointsAndLifecycle(t *testing.T) {
-	// Use an arbitrary high port for local test server binding
+	cleaner := NewMetricsCleaner(func(target string) {})
+
 	addr := "127.0.0.1:18080"
-	srv := New(addr)
+	srv := New(addr, cleaner)
 
-	// Start server in background goroutine
 	go srv.Start()
-
-	// Wait briefly for server to bind and listen
 	time.Sleep(50 * time.Millisecond)
 
 	baseURL := "http://" + addr
@@ -81,7 +78,52 @@ func TestServer_EndpointsAndLifecycle(t *testing.T) {
 		})
 	}
 
-	// Test graceful shutdown
+	t.Run("MetricsCleaner_PostScrapeExecution", func(t *testing.T) {
+		var mu sync.Mutex
+		deletedTargets := make(map[string]bool)
+
+		testCleaner := NewMetricsCleaner(func(target string) {
+			mu.Lock()
+			defer mu.Unlock()
+			deletedTargets[target] = true
+		})
+
+		testAddr := "127.0.0.1:18081"
+		subSrv := New(testAddr, testCleaner)
+		go subSrv.Start()
+		time.Sleep(30 * time.Millisecond)
+
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+			defer cancel()
+			_ = subSrv.Shutdown(ctx)
+		}()
+
+		dummyTarget := "http://10.0.0.99:80/healthz"
+		testCleaner.MarkForDeletion(dummyTarget)
+
+		resp, err := client.Get("http://" + testAddr + "/metrics")
+		if err != nil {
+			t.Fatalf("failed to scrape /metrics: %v", err)
+		}
+		_ = resp.Body.Close()
+
+		var cleaned bool
+		for i := 0; i < 20; i++ {
+			mu.Lock()
+			cleaned = deletedTargets[dummyTarget]
+			mu.Unlock()
+			if cleaned {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+
+		if !cleaned {
+			t.Errorf("expected target %s to be cleaned up after scrape, but callback was not invoked", dummyTarget)
+		}
+	})
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 

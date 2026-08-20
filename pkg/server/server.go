@@ -6,17 +6,16 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/pprof"
-
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type Server struct {
-	srv *http.Server
+	srv     *http.Server
+	Cleaner *MetricsCleaner
 }
 
-func New(addr string) *Server {
+func New(addr string, cleaner *MetricsCleaner) *Server {
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/metrics", cleaner.Handler())
 
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
@@ -41,7 +40,7 @@ func New(addr string) *Server {
 func (s *Server) Start() {
 	slog.Info("Metric server starting", "addr", s.srv.Addr)
 	if err := s.srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-		slog.Error("HTTP server failed to run", "error", err)
+		slog.Error("Metric server failed to run", "error", err)
 	}
 }
 

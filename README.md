@@ -26,10 +26,39 @@
 - **Dual-Informer Target Discovery:** Automatically streams dynamic endpoints via Kubernetes `discoveryv1.EndpointSlice` informers and declarative static targets from custom resources (`StaticTarget` via `kube-prober.io/v1alpha1`) without API polling overhead.
 - **Multi-Protocol Health Probing:** Native probing handlers for **HTTP/HTTPS**, **TCP**, **TLS** (cert expiry & handshake), **gRPC** (`grpc.health.v1.Health`), and **DNS** (domain resolution and record validation). Protocol schemes and custom parameters are dynamically configurable via Service annotations (`probe/scheme`, `probe/path`).
 - **Multi-Channel Alerting (Slack & Pushover):** Pre-configured Alertmanager routing featuring ChatOps audit trails in Slack and high-priority mobile push notifications via Pushover for `critical` incidents.
-- **Distributed Target Sharding (Rendezvous Hashing):** Scales horizontally with Kubernetes HPA by partitioning target endpoints across prober replicas using Highest Random Weight (HRW) hashing, preventing duplicate probes.
+- **Distributed Target Sharding (Rendezvous Hashing):** Implements stateless Highest Random Weight (HRW) hashing with 100 Virtual Nodes (VNodes) per replica. Enforces tight Gaussian load balancing and coordination-free target distribution across dynamic HPA scaling events with minimal reassignment churn.
 - **SLO / SLI & Burn Rate Alerting:** Computes real-time Availability (99.9%) and Latency SLIs via Prometheus Recording Rules with multi-window burn rate alerts (1h / 5m).
 - **Production-Grade High Availability & Lifecycles:** Features `PodDisruptionBudget` (PDB), `HorizontalPodAutoscaler` (HPA), Topology Spread Constraints, native `/healthz` & `/readyz` K8s probes, and graceful shutdown signal handling (`SIGTERM`).
 - **GitOps Continuous Delivery & Telemetry Stack:** Managed declaratively via Argo CD with auto-provisioned Grafana dashboards and Prometheus rules.
+
+---
+
+## Enabling Service Discovery for Target Workloads
+
+`kube-prober` dynamically monitors workloads by watching Kubernetes `EndpointSlices`. To onboard a service, simply apply the discovery label and optional protocol annotations to your `Service` resource.
+
+### Configuration Example
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-service
+  namespace: default
+  labels:
+    probe: "true"                # Required: Triggers discovery in kube-prober
+  annotations:
+    probe/scheme: "http"         # Optional: http, https, tcp, tls, grpc (default: http)
+    probe/path: "/healthz"       # Optional: Endpoint path (default: /healthz)
+spec:
+  type: ClusterIP
+  selector:
+    app: my-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+```
 
 ---
 
@@ -172,6 +201,37 @@ make stop-forward
 # Run unit and integration tests with the race detector enabled
 make test
 ```
+
+### Sharding & Load Balancing in Action
+
+To verify uniform target distribution without central coordination, run the distribution test target:
+
+```bash
+# Deploy 100 demo endpoints and scale kube-prober to 5 replicas
+make demo-up
+kubectl scale deployment/kube-prober --replicas=5
+```
+
+```bash
+# Inspect live target partition across all replicas
+make test-sharding-distribution
+```
+
+Real-Time Output (Scratch-Compatible Metric Extraction):
+
+```text
+=========================================================
+ Real-Time Target Distribution (Scratch-Compatible)
+=========================================================
+kube-prober-7795cb58fd-7wk5j     : 19 active targets
+kube-prober-7795cb58fd-fkxxl     : 22 active targets
+kube-prober-7795cb58fd-xxfrv     : 21 active targets
+kube-prober-7795cb58fd-rqtjm     : 23 active targets
+kube-prober-7795cb58fd-fs5pt     : 19 active targets
+=========================================================
+```
+
+Total: 104 targets (100 dynamic + 4 core static) distributed evenly across 5 pods with near-zero variance.
 
 ![Kubernetes Pods](./assets/pods.png)
 

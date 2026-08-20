@@ -49,6 +49,20 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
+            - name: LOG_LEVEL
+              value: {{ .Values.env.logLevel | quote }}
+            - name: WORKERS
+              value: {{ .Values.env.workers | quote }}
+            - name: QUEUE_SIZE
+              value: {{ .Values.env.queueSize | quote }}
+            - name: PROBE_INTERVAL_SECONDS
+              value: {{ .Values.env.probeIntervalSeconds | quote }}
+            - name: HTTP_TIMEOUT_SECONDS
+              value: {{ .Values.env.httpTimeoutSeconds | quote }}
+            - name: MAX_IDLE_CONNS
+              value: {{ .Values.env.maxIdleConns | quote }}
+            - name: MAX_IDLE_CONNS_PER_HOST
+              value: {{ .Values.env.maxIdleConnsPerHost | quote }}
           livenessProbe:
             httpGet:
               path: /healthz

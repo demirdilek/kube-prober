@@ -39,3 +39,13 @@ hpa:
 topologySpreadConstraints:
   enabled: true
   whenUnsatisfiable: ScheduleAnyway
+
+# Application environment variables
+env:
+  logLevel: "DEBUG"
+  workers: 50
+  queueSize: 10000
+  probeIntervalSeconds: 2
+  httpTimeoutSeconds: 5
+  maxIdleConns: 1000
+  maxIdleConnsPerHost: 100

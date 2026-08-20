@@ -26,8 +26,18 @@ func init() {
 }
 
 func main() {
+	// Set Log	with enviroment variable
+	logLevel := slog.LevelInfo
+	if os.Getenv("LOG_LEVEL") == "DEBUG" {
+		logLevel = slog.LevelDebug
+	}
+
+	opts := &slog.HandlerOptions{
+		Level: logLevel,
+	}
+
 	// Setup structured JSON logging to stdout for cloud-native log ingestion
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, opts)))
 
 	// Listen for OS interrupt and SIGTERM signals to initiate a graceful shutdown
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -128,6 +138,12 @@ func main() {
 	// Track active per-target scheduler cancellation functions
 	activeSchedulers := make(map[string]context.CancelFunc)
 	var schedMu sync.Mutex
+	
+	// 1. Initialize cleaner with the metric purge callback
+	cleaner := server.NewMetricsCleaner(prober.DeleteTargetMetrics)
+	// Start the internal HTTP server to expose Prometheus metrics and health probes (:8080)
+	srv := server.New(":8080", cleaner)
+	go srv.Start()
 
 	// Event loop: handle target additions, rebalancing decisions, and removals from the registry
 	go func() {
@@ -145,45 +161,31 @@ func main() {
 					defer schedMu.Unlock()
 
 					if evt.IsAdded {
-						// Target assigned to this replica: start a local periodic probe scheduler
+						// Cancel any pending deferred deletion if target is re-added
+						cleaner.AbortDeletion(evt.Target.Address)
+
 						if _, exists := activeSchedulers[evt.Target.Address]; !exists {
 							slog.Info("New target discovered", "target", evt.Target.Address, "scheme", evt.Target.Scheme)
 							schedCtx, schedCancel := context.WithCancel(ctx)
 							activeSchedulers[evt.Target.Address] = schedCancel
 
-							// Track the scheduler lifecycle via schedulerWG
 							schedulerWG.Add(1)
 							go prober.TargetScheduler(schedCtx, evt.Target, jobs, probeInterval, &schedulerWG)
 						}
 					} else {
-						// Target revoked or deleted: stop the scheduler and schedule metric cleanup
 						if cancelFunc, exists := activeSchedulers[evt.Target.Address]; exists {
 							slog.Info("Target removed", "target", evt.Target.Address)
 							cancelFunc()
 							delete(activeSchedulers, evt.Target.Address)
 
-							// Purge stale Prometheus metrics after waiting for final scraper collection
-							go func(targetAddr string) {
-								time.Sleep(6 * time.Second)
-								schedMu.Lock()
-								_, reAdded := activeSchedulers[targetAddr]
-								schedMu.Unlock()
-
-								if !reAdded {
-									prober.DeleteTargetMetrics(targetAddr)
-									slog.Debug("Metrics purged for removed target", "target", targetAddr)
-								}
-							}(evt.Target.Address)
+							// Queue post-scrape metric cleanup without blocking goroutines
+							cleaner.MarkForDeletion(evt.Target.Address)
 						}
 					}
 				}()
 			}
 		}
 	}()
-
-	// Start the internal HTTP server to expose Prometheus metrics and health probes (:8080)
-	srv := server.New(":8080")
-	go srv.Start()
 
 	// Block main routine until an OS termination signal is received
 	<-ctx.Done()

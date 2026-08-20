@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discovery-demo
+  namespace: default
+  labels:
+    app.kubernetes.io/name: discovery-demo
+spec:
+  replicas: 100
+  selector:
+    matchLabels:
+      app: discovery-demo
+  template:
+    metadata:
+      labels:
+        app: discovery-demo
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo:latest
+          args:
+            - "-text=ready"
+            - "-listen=:8080"
+          ports:
+            - containerPort: 8080
+              name: http
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: discovery-demo
+  namespace: default
+  labels:
+    app: discovery-demo
+    probe: "true"
+  annotations:
+    probe/scheme: "http"
+    probe/path: "/"
+spec:
+  type: ClusterIP
+  selector:
+    app: discovery-demo
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

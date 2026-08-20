@@ -25,6 +25,12 @@ This document outlines the planned improvements, architectural refinements, and 
   - Unregister or clean up Prometheus metrics (Gauge/Counter labels) upon target deletion to avoid stale metrics and memory leaks.
 - [X] **Dual-Informer Discovery & StaticTarget CRDs (`pkg/prober/statictargets.go`, ADR 0023)**
   - Dedicated dynamic shared informer for declarative `StaticTarget` Custom Resources (`kube-prober.io/v1alpha1`) running concurrently with the EndpointSlice informer.
+- [X] **Lock-Scope & Cleaner Optimization (`pkg/server/metrics_cleaner.go`)**
+  - Reduce mutex hold time during `/metrics` scrapes: collect targets under lock and invoke `deleteFn` outside critical section.
+- [ ] **HTTP Client Timeout Decoupling (`pkg/prober/http.go`)**
+  - Rely purely on context-based deadlines (`probeCtx`) and remove competing hardcoded client-level timeouts.
+- [ ] **Helm ServiceMonitor Config Flexibility (`helm/kube-prober/templates/servicemonitor.yaml`)**
+  - Parametrize the `release: prom-stack` label via `values.yaml` (`serviceMonitor.releaseLabel`).
 - [ ] **CRD Robustness & Schema Validation (`StaticTarget`)**
   - [ ] Add OpenAPI v3 schema validation and CEL (Common Expression Language) rules to reject invalid schemes, malformed hostnames/ports, and out-of-range timeouts during `kubectl apply`.
   - [ ] Support granular per-target configurations in CRD spec (custom HTTP headers, basic auth / bearer tokens, timeout overrides).
@@ -35,6 +41,11 @@ This document outlines the planned improvements, architectural refinements, and 
 
 - [X] **Distributed Target Sharding via Consistent Hashing**
   - Implement a sharding mechanism (e.g., consistent hashing or modulo partitioning based on pod ordinal/IPs) across prober replicas when scaled via HPA to prevent duplicate probing and horizontally distribute workload.
+- [X] **Sharding Uniformity & Virtual Nodes Refinement (`pkg/prober/registry.go`)**
+  - Implement Virtual Nodes (vnodes) / fine-grained Rendezvous Hashing weights to eliminate target skew (<5% standard deviation across replicas at 1000+ endpoints).
+  - Verify fully qualified target keys (`namespace/service/address:port`) across all multi-replica endpoints.
+- [ ] **Graceful Shutdown & Draining Order Optimization (`main.go`)**
+  - Orderly drain: close `jobs` strictly after all schedulers terminate, and keep HTTP metric server alive until worker pool completes final scrapes.
 - [X] **SLO / SLI & Error Budget Exporting**
   - Expose calculated multi-window burn rates directly as Prometheus metrics and ship pre-configured `PrometheusRule` manifests.
 - [X] **Protocol Extension (TCP / TLS / gRPC / DNS)**

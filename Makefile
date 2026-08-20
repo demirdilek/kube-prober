@@ -158,6 +158,21 @@ test-alert-all: ## Trigger all alerts
 test-discovery: ## Deploy annotated 5-replica workload to test EndpointSlice Informer & Sharding
 	@./scripts/test-discovery.sh
 
+test-sharding-distribution: ## Show real-time active targets directly from Prometheus metrics (scratch-compatible)
+	@echo "========================================================="
+	@echo " Real-Time Target Distribution (Scratch-Compatible)"
+	@echo "========================================================="
+	@for pod in $$(kubectl get pods -l app.kubernetes.io/name=kube-prober -o jsonpath='{.items[*].metadata.name}'); do \
+		kubectl port-forward pod/$$pod 18080:8080 >/dev/null 2>&1 & \
+		PID=$$!; \
+		sleep 0.2; \
+		count=$$(curl -s http://127.0.0.1:18080/metrics 2>/dev/null | grep -E "^kube_prober_traffic_total\{" | wc -l); \
+		kill $$PID 2>/dev/null || true; \
+		wait $$PID 2>/dev/null || true; \
+		printf "%-32s : %s active targets\n" "$$pod" "$$count"; \
+	done
+	@echo "========================================================="
+
 test-grpc-happy: ## Deploy a functioning gRPC server to test healthy gRPC probes
 	@./scripts/test-grpc-happy.sh
 
@@ -209,3 +224,24 @@ release: ## Bump version, update manifests, commit, tag, and push (e.g. make rel
 	@git push origin main
 	@git push origin v$(V)
 	@echo "==> Release v$(V) successfully initiated."
+
+# ==============================================================================
+# Discovery Demo Workloads
+# ==============================================================================
+DEMO_NAMESPACE ?= default
+DEMO_REPLICAS  ?= 100
+
+demo-up: ## demo-up: Deploy discovery-demo workloads with configurable replicas (default: 100)
+	@echo "==> Deploying discovery-demo ($(DEMO_REPLICAS) replicas)..."
+	kubectl apply -f deployments/discovery-demo.yaml -n $(DEMO_NAMESPACE)
+	kubectl scale deployment/discovery-demo --replicas=$(DEMO_REPLICAS) -n $(DEMO_NAMESPACE)
+	@echo "==> Waiting for discovery-demo pods to be ready..."
+	kubectl rollout status deployment/discovery-demo -n $(DEMO_NAMESPACE) --timeout=60s
+
+demo-scale: ## demo-scale: Scale discovery-demo replicas on demand (e.g. make demo-scale REPLICAS=50)
+	@echo "==> Scaling discovery-demo to $(REPLICAS) replicas..."
+	kubectl scale deployment/discovery-demo --replicas=$(REPLICAS) -n $(DEMO_NAMESPACE)
+
+demo-down: ## demo-down: Tear down and delete discovery-demo resources
+	@echo "==> Deleting discovery-demo deployment and services..."
+	kubectl delete -f deployments/discovery-demo.yaml -n $(DEMO_NAMESPACE) --ignore-not-found=true
