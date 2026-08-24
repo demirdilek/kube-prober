@@ -15,7 +15,7 @@
 
 ## 📦 Container Image Specs
 
-- **Registry:** `ghcr.io/demirdilek/kube-prober:1.0.5`
+- **Registry:** `ghcr.io/demirdilek/kube-prober:1.0.6`
 - **Base Image:** `scratch` (Minimalist & secure zero-OS runtime)
 - **Architecture:** Multi-Arch (`amd64` / `arm64`)
 
@@ -205,6 +205,11 @@ make test
 ### Sharding & Load Balancing in Action
 
 To verify uniform target distribution without central coordination, run the distribution test target:
+
+```bash
+# Pause Argo CD auto-sync/self-heal to prevent resetting replicas
+make argocd-local-enable
+```
 
 ```bash
 # Deploy 100 demo endpoints and scale kube-prober to 5 replicas
