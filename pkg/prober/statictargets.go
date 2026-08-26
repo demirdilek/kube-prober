@@ -44,7 +44,7 @@ func WatchStaticTargets(ctx context.Context, dynClient dynamic.Interface, regist
 				slog.Error("Failed to parse StaticTarget CRD", "error", err, "name", u.GetName())
 				return
 			}
-			registry.Add(target)
+			registry.Add(ctx, target)
 			slog.Info("Loaded static target from CRD", "name", target.Name, "address", target.Address, "scheme", target.Scheme)
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
@@ -57,7 +57,7 @@ func WatchStaticTargets(ctx context.Context, dynClient dynamic.Interface, regist
 				slog.Error("Failed to parse updated StaticTarget CRD", "error", err, "name", u.GetName())
 				return
 			}
-			registry.Add(target)
+			registry.Add(ctx, target)
 		},
 		DeleteFunc: func(obj interface{}) {
 			u, ok := obj.(*unstructured.Unstructured)
@@ -76,7 +76,7 @@ func WatchStaticTargets(ctx context.Context, dynClient dynamic.Interface, regist
 				return
 			}
 			// Trigger remove event for static target
-			registry.Remove(target.Address)
+			registry.Remove(ctx, target.Address)
 			slog.Info("Removed static target from CRD", "name", target.Name, "address", target.Address)
 		},
 	})

@@ -11,15 +11,15 @@ type Job struct {
 	Target Target
 }
 
-// ProbeTarget executes a probe against a target and records 4 Golden Signals metrics.
-func ProbeTarget(ctx context.Context, target Target, dispatcher *Dispatcher) {
+// ProbeTarget executes a probe against a target with configurable timeout.
+func ProbeTarget(ctx context.Context, target Target, dispatcher *Dispatcher, timeout time.Duration) {
 	SaturationGauge.Inc()
 	defer SaturationGauge.Dec()
 
 	TrafficCounter.WithLabelValues(target.Address).Inc()
 
-	// Create a new context with a timeout for the probe execution
-	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// Timeout aus Konfiguration statt festen 5s nutzen
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	startTime := time.Now()
@@ -28,7 +28,6 @@ func ProbeTarget(ctx context.Context, target Target, dispatcher *Dispatcher) {
 
 	LatencyHistogram.WithLabelValues(target.Address).Observe(duration)
 
-	// Record the error category if there was an error, otherwise log success
 	if errCat != "" {
 		ErrorCounter.WithLabelValues(target.Address, string(errCat)).Inc()
 		slog.Warn(
@@ -43,20 +42,12 @@ func ProbeTarget(ctx context.Context, target Target, dispatcher *Dispatcher) {
 	}
 }
 
-// WorkerPool processes incoming probe jobs until the channel is closed or context is cancelled.
-func WorkerPool(ctx context.Context, jobs <-chan Job, dispatcher *Dispatcher, wg *sync.WaitGroup) {
+// WorkerPool reicht den timeout weiter
+func WorkerPool(ctx context.Context, jobs <-chan Job, dispatcher *Dispatcher, timeout time.Duration, wg *sync.WaitGroup) {
 	defer wg.Done()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case job, ok := <-jobs:
-			if !ok {
-				// Channel closed and drained
-				return
-			}
-			ProbeTarget(ctx, job.Target, dispatcher)
-		}
+
+	for job := range jobs {
+		ProbeTarget(ctx, job.Target, dispatcher, timeout)
 	}
 }
 
@@ -74,6 +65,7 @@ func TargetScheduler(ctx context.Context, target Target, jobs chan<- Job, interv
 		return
 	default:
 		// Queue full: skip immediate probe and wait for next interval tick
+		slog.Warn("Job queue full, probe dropped", "target", target.Address)
 	}
 
 	for {
@@ -87,6 +79,7 @@ func TargetScheduler(ctx context.Context, target Target, jobs chan<- Job, interv
 				return
 			default:
 				// Queue full: skip immediate probe and wait for next interval tick
+				slog.Warn("Job queue full, probe dropped", "target", target.Address)
 			}
 		}
 	}

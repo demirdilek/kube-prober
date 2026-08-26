@@ -56,7 +56,6 @@ func TestWorkerPool(t *testing.T) {
 
 	d := NewDispatcher()
 
-	// Use a channel to track if our mock prober was executed by the worker
 	called := make(chan Target, 1)
 	mockProber := func(ctx context.Context, target Target) ErrorCategory {
 		called <- target
@@ -77,9 +76,9 @@ func TestWorkerPool(t *testing.T) {
 	jobs <- Job{Target: target}
 
 	wg.Add(1)
-	go WorkerPool(ctx, jobs, d, &wg)
+	go WorkerPool(ctx, jobs, d, 2*time.Second, &wg)
 
-	// Verify the mock prober was executed with the correct target data
+	// Verify the mock prober was executed
 	select {
 	case executedTarget := <-called:
 		if executedTarget.Address != target.Address {
@@ -89,7 +88,7 @@ func TestWorkerPool(t *testing.T) {
 		t.Fatal("WorkerPool failed to process job in time")
 	}
 
-	// Cleanup
-	cancel()
+	// Cleanup: Channel schließen, damit range jobs im Worker terminiert!
+	close(jobs)
 	wg.Wait()
 }

@@ -2,6 +2,7 @@ package prober
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
 	"net/http"
 	"strings"
@@ -9,13 +10,28 @@ import (
 
 // HTTPProber executes HTTP and HTTPS connection checks.
 type HTTPProber struct {
-	client *http.Client
+	defaultClient  *http.Client
+	insecureClient *http.Client
 }
 
-// NewHTTPProber creates a new HTTP prober with the provided http.Client.
-func NewHTTPProber(client *http.Client) *HTTPProber {
+// NewHTTPProber creates a new HTTP prober.
+// It sets up both a standard verifying client and an insecure client for self-signed targets.
+func NewHTTPProber(baseTransport *http.Transport) *HTTPProber {
+	// Standard Transport
+	stdTransport := baseTransport.Clone()
+
+	// Insecure Transport with TLS verification disabled
+	insecureTransport := baseTransport.Clone()
+	if insecureTransport.TLSClientConfig == nil {
+		insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // #nosec G402 -- Configurable for test targets
+	} else {
+		insecureTransport.TLSClientConfig = insecureTransport.TLSClientConfig.Clone()
+		insecureTransport.TLSClientConfig.InsecureSkipVerify = true
+	}
+
 	return &HTTPProber{
-		client: client,
+		defaultClient:  &http.Client{Transport: stdTransport},
+		insecureClient: &http.Client{Transport: insecureTransport},
 	}
 }
 
@@ -30,7 +46,13 @@ func (p *HTTPProber) ProbeHTTPTarget(ctx context.Context, target Target) ErrorCa
 		return CategoryUnknown
 	}
 
-	resp, err := p.client.Do(req)
+	// Choose appropriate client based on target configuration
+	client := p.defaultClient
+	if target.InsecureSkipVerify {
+		client = p.insecureClient
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return MapToCategory(err, 0)
 	}

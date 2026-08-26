@@ -85,7 +85,7 @@ func (w *KubeWatcher) Start(ctx context.Context) error {
 				if slice.Labels["probe"] == "true" {
 					// Pass the serviceLister for fast annotation lookup
 					scheme, path := w.getProbeSchemeAndPath(slice, serviceLister)
-					w.registry.UpdateFromEndpointSlice(slice, scheme, path)
+					w.registry.UpdateFromEndpointSlice(ctx, slice, scheme, path)
 				}
 			}
 		},
@@ -94,10 +94,10 @@ func (w *KubeWatcher) Start(ctx context.Context) error {
 				if newSlice.Labels["probe"] == "true" {
 					// Pass the serviceLister for fast annotation lookup
 					scheme, path := w.getProbeSchemeAndPath(newSlice, serviceLister)
-					w.registry.UpdateFromEndpointSlice(newSlice, scheme, path)
+					w.registry.UpdateFromEndpointSlice(ctx, newSlice, scheme, path)
 				} else {
 					// Target lost the "probe" label, safely remove it
-					w.registry.RemoveEndpointSlice(newSlice, "", "")
+					w.registry.RemoveEndpointSlice(ctx, newSlice, "", "")
 				}
 			}
 		},
@@ -121,7 +121,7 @@ func (w *KubeWatcher) Start(ctx context.Context) error {
 
 			// 3. Now that we safely have the 'slice', we can read its labels and clean up
 			if slice.Labels["probe"] == "true" {
-				w.registry.RemoveEndpointSlice(slice, "", "")
+				w.registry.RemoveEndpointSlice(ctx, slice, "", "")
 			}
 		},
 	})
@@ -165,7 +165,7 @@ func (w *KubeWatcher) WatchPeers(ctx context.Context) {
 		}
 
 		if len(peerIPs) > 0 {
-			w.registry.UpdatePeers(peerIPs)
+			w.registry.UpdatePeers(ctx, peerIPs)
 		}
 	}
 
@@ -179,4 +179,5 @@ func (w *KubeWatcher) WatchPeers(ctx context.Context) {
 	cache.WaitForCacheSync(ctx.Done(), informer.HasSynced)
 
 	updatePeers()
+	<-ctx.Done()
 }

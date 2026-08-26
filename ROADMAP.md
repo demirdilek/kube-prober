@@ -27,9 +27,9 @@ This document outlines the planned improvements, architectural refinements, and 
   - Dedicated dynamic shared informer for declarative `StaticTarget` Custom Resources (`kube-prober.io/v1alpha1`) running concurrently with the EndpointSlice informer.
 - [X] **Lock-Scope & Cleaner Optimization (`pkg/server/metrics_cleaner.go`)**
   - Reduce mutex hold time during `/metrics` scrapes: collect targets under lock and invoke `deleteFn` outside critical section.
-- [ ] **HTTP Client Timeout Decoupling (`pkg/prober/http.go`)**
+- [X] **HTTP Client Timeout Decoupling (`pkg/prober/http.go`)**
   - Rely purely on context-based deadlines (`probeCtx`) and remove competing hardcoded client-level timeouts.
-- [ ] **Helm ServiceMonitor Config Flexibility (`helm/kube-prober/templates/servicemonitor.yaml`)**
+- [X] **Helm ServiceMonitor Config Flexibility (`helm/kube-prober/templates/servicemonitor.yaml`)**
   - Parametrize the `release: prom-stack` label via `values.yaml` (`serviceMonitor.releaseLabel`).
 - [ ] **CRD Robustness & Schema Validation (`StaticTarget`)**
   - [ ] Add OpenAPI v3 schema validation and CEL (Common Expression Language) rules to reject invalid schemes, malformed hostnames/ports, and out-of-range timeouts during `kubectl apply`.
@@ -44,7 +44,7 @@ This document outlines the planned improvements, architectural refinements, and 
 - [X] **Sharding Uniformity & Virtual Nodes Refinement (`pkg/prober/registry.go`)**
   - Implement Virtual Nodes (vnodes) / fine-grained Rendezvous Hashing weights to eliminate target skew (<5% standard deviation across replicas at 1000+ endpoints).
   - Verify fully qualified target keys (`namespace/service/address:port`) across all multi-replica endpoints.
-- [ ] **Graceful Shutdown & Draining Order Optimization (`main.go`)**
+- [X] **Graceful Shutdown & Draining Order Optimization (`main.go`)**
   - Orderly drain: close `jobs` strictly after all schedulers terminate, and keep HTTP metric server alive until worker pool completes final scrapes.
 - [X] **SLO / SLI & Error Budget Exporting**
   - Expose calculated multi-window burn rates directly as Prometheus metrics and ship pre-configured `PrometheusRule` manifests.

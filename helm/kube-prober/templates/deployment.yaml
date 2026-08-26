@@ -57,8 +57,8 @@ spec:
               value: {{ .Values.env.queueSize | quote }}
             - name: PROBE_INTERVAL_SECONDS
               value: {{ .Values.env.probeIntervalSeconds | quote }}
-            - name: HTTP_TIMEOUT_SECONDS
-              value: {{ .Values.env.httpTimeoutSeconds | quote }}
+            - name: PROBE_TIMEOUT_SECONDS
+              value: {{ .Values.env.probeTimeoutSeconds | quote }}
             - name: MAX_IDLE_CONNS
               value: {{ .Values.env.maxIdleConns | quote }}
             - name: MAX_IDLE_CONNS_PER_HOST

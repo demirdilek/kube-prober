@@ -42,7 +42,7 @@ func TestKubeWatcher_InformerEvents_DynamicPath(t *testing.T) {
 
 	// 2. Initialize Registry and Watcher
 	registry := NewRegistry("10.0.0.1")
-	registry.UpdatePeers([]string{"10.0.0.1"}) // Make this pod the owner
+	registry.UpdatePeers(ctx, []string{"10.0.0.1"}) // Make this pod the owner
 	watcher := NewKubeWatcher(clientset, registry)
 
 	// 3. Start the watcher and wait for caches to sync

@@ -1,6 +1,7 @@
 package prober
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -31,6 +32,11 @@ func NewRegistry(selfPodIP string) *Registry {
 	}
 }
 
+// Close closes the Events channel to signal that no more events will be produced.
+func (r *Registry) Close() {
+	close(r.Events)
+}
+
 func (r *Registry) shouldProcessTargetLocked(target string) bool {
 	return evalShardingOwner(target, r.selfPodIP, r.clusterPodIPs)
 }
@@ -42,17 +48,21 @@ func (r *Registry) ShouldProcessTarget(targetAddress string) bool {
 	return r.shouldProcessTargetLocked(targetAddress)
 }
 
-func (r *Registry) emitEvent(evt TargetEvent) {
+func (r *Registry) emitEvent(ctx context.Context, evt TargetEvent) {
 	if !evt.IsAdded {
 		select {
+		case <-ctx.Done():
+			return
 		case r.Events <- evt:
 		case <-time.After(2 * time.Second):
-			slog.Error("Critical: Failed to deliver target removal event within timeout", "target", evt.Target.Address)
+			slog.Error("Failed to deliver target removal event", "target", evt.Target.Address)
 		}
 		return
 	}
 
 	select {
+	case <-ctx.Done():
+		return
 	case r.Events <- evt:
 	case <-time.After(100 * time.Millisecond):
 		slog.Warn("Registry events channel full, skipping transient add event", "target", evt.Target.Address)
@@ -60,7 +70,7 @@ func (r *Registry) emitEvent(evt TargetEvent) {
 }
 
 // UpdatePeers synchronizes the active prober replica topology and triggers target rebalancing.
-func (r *Registry) UpdatePeers(peers []string) {
+func (r *Registry) UpdatePeers(ctx context.Context, peers []string) {
 	var eventsToSend []TargetEvent
 
 	func() {
@@ -90,12 +100,12 @@ func (r *Registry) UpdatePeers(peers []string) {
 	}()
 
 	for _, evt := range eventsToSend {
-		r.emitEvent(evt)
+		r.emitEvent(ctx, evt)
 	}
 }
 
 // UpdateFromEndpointSlice reconciles endpoints discovered dynamically from Kubernetes EndpointSlices.
-func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, scheme, path string) {
+func (r *Registry) UpdateFromEndpointSlice(ctx context.Context, slice *discoveryv1.EndpointSlice, scheme, path string) {
 	var eventsToSend []TargetEvent
 
 	func() {
@@ -179,12 +189,12 @@ func (r *Registry) UpdateFromEndpointSlice(slice *discoveryv1.EndpointSlice, sch
 	}()
 
 	for _, evt := range eventsToSend {
-		r.emitEvent(evt)
+		r.emitEvent(ctx, evt)
 	}
 }
 
 // RemoveEndpointSlice unregisters all dynamic targets associated with a deleted EndpointSlice resource.
-func (r *Registry) RemoveEndpointSlice(slice *discoveryv1.EndpointSlice, scheme, path string) {
+func (r *Registry) RemoveEndpointSlice(ctx context.Context, slice *discoveryv1.EndpointSlice, scheme, path string) {
 	var eventsToSend []TargetEvent
 
 	func() {
@@ -215,12 +225,12 @@ func (r *Registry) RemoveEndpointSlice(slice *discoveryv1.EndpointSlice, scheme,
 	}()
 
 	for _, evt := range eventsToSend {
-		r.emitEvent(evt)
+		r.emitEvent(ctx, evt)
 	}
 }
 
 // Add registers a declarative static target from CRD definitions.
-func (r *Registry) Add(target Target) {
+func (r *Registry) Add(ctx context.Context, target Target) {
 	var eventToSend *TargetEvent
 
 	func() {
@@ -244,12 +254,12 @@ func (r *Registry) Add(target Target) {
 	}()
 
 	if eventToSend != nil {
-		r.emitEvent(*eventToSend)
+		r.emitEvent(ctx, *eventToSend)
 	}
 }
 
 // Remove unregisters a target by its address and emits a removal event if currently active.
-func (r *Registry) Remove(address string) {
+func (r *Registry) Remove(ctx context.Context, address string) {
 	var eventToSend *TargetEvent
 
 	func() {
@@ -271,6 +281,6 @@ func (r *Registry) Remove(address string) {
 	}()
 
 	if eventToSend != nil {
-		r.emitEvent(*eventToSend)
+		r.emitEvent(ctx, *eventToSend)
 	}
 }

@@ -12,6 +12,11 @@ service:
   type: ClusterIP
   port: 8080
 
+# ServiceMonitor configuration for Prometheus Operator discovery
+serviceMonitor:
+  enabled: true
+  releaseLabel: prom-stack
+
 # Resource requests and limits for the prober container
 resources:
   limits:
@@ -46,6 +51,6 @@ env:
   workers: 50
   queueSize: 10000
   probeIntervalSeconds: 2
-  httpTimeoutSeconds: 5
+  probeTimeoutSeconds: 5
   maxIdleConns: 1000
   maxIdleConnsPerHost: 100

@@ -24,7 +24,9 @@ func TestHTTPProber_ProbeHTTPTarget(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	prober := NewHTTPProber(ts.Client())
+	baseTransport := &http.Transport{}
+
+	prober := NewHTTPProber(baseTransport)
 
 	tests := []struct {
 		name      string
@@ -98,5 +100,41 @@ func TestHTTPProber_ProbeHTTPTarget(t *testing.T) {
 				t.Errorf("ProbeHTTPTarget() expected success, got error category: %v", got)
 			}
 		})
+	}
+}
+
+func TestHTTPProber_InsecureSkipVerify(t *testing.T) {
+	// Start local TLS server (generates a self-signed certificate)
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	baseTransport := &http.Transport{}
+	prober := NewHTTPProber(baseTransport)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// 1. Without InsecureSkipVerify: should fail with TLS error
+	strictTarget := Target{
+		Name:               "strict-tls-target",
+		Address:            ts.URL,
+		Scheme:             "https",
+		InsecureSkipVerify: false,
+	}
+	if errCat := prober.ProbeHTTPTarget(ctx, strictTarget); errCat != CategoryTLS {
+		t.Errorf("expected CategoryTLS for self-signed cert without skip-verify, got %q", errCat)
+	}
+
+	// 2. With InsecureSkipVerify: should succeed
+	insecureTarget := Target{
+		Name:               "insecure-tls-target",
+		Address:            ts.URL,
+		Scheme:             "https",
+		InsecureSkipVerify: true,
+	}
+	if errCat := prober.ProbeHTTPTarget(ctx, insecureTarget); errCat != "" {
+		t.Errorf("expected success for target with InsecureSkipVerify=true, got %q", errCat)
 	}
 }

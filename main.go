@@ -48,23 +48,20 @@ func main() {
 	prober.MaxWorkersGauge.Set(float64(numWorkers))
 	jobQueueSize := env.GetInt("QUEUE_SIZE", 10000)
 	probeInterval := time.Duration(env.GetInt("PROBE_INTERVAL_SECONDS", 2)) * time.Second
-	httpTimeout := time.Duration(env.GetInt("HTTP_TIMEOUT_SECONDS", 5)) * time.Second
+	probeTimeout := time.Duration(env.GetInt("PROBE_TIMEOUT_SECONDS", 5)) * time.Second
 
 	// Pre-configure HTTP transport with aggressive connection pooling to prevent socket exhaustion
-	httpClient := &http.Client{
-		Timeout: httpTimeout,
-		Transport: &http.Transport{
-			MaxIdleConns:        env.GetInt("MAX_IDLE_CONNS", 1000),
-			MaxIdleConnsPerHost: env.GetInt("MAX_IDLE_CONNS_PER_HOST", 100),
-			IdleConnTimeout:     90 * time.Second,
-		},
+	baseTransport := &http.Transport{
+		MaxIdleConns:        env.GetInt("MAX_IDLE_CONNS", 1000),
+		MaxIdleConnsPerHost: env.GetInt("MAX_IDLE_CONNS_PER_HOST", 100),
+		IdleConnTimeout:     90 * time.Second,
 	}
 
 	// Initialize protocol dispatcher and register respective health-check handlers
 	dispatcher := prober.NewDispatcher()
 
 	// Register HTTP/HTTPS handlers
-	httpProber := prober.NewHTTPProber(httpClient)
+	httpProber := prober.NewHTTPProber(baseTransport)
 	dispatcher.Register("http", httpProber.ProbeHTTPTarget)
 	dispatcher.Register("https", httpProber.ProbeHTTPTarget)
 
@@ -94,7 +91,7 @@ func main() {
 	// Spawn the worker pool goroutines to process incoming probe jobs concurrently
 	for i := 0; i < numWorkers; i++ {
 		workerWG.Add(1)
-		go prober.WorkerPool(ctx, jobs, dispatcher, &workerWG)
+		go prober.WorkerPool(ctx, jobs, dispatcher, probeTimeout, &workerWG)
 	}
 
 	// Initialize standard Kubernetes Clientset for service discovery and peer tracking
@@ -115,30 +112,47 @@ func main() {
 	selfIP := os.Getenv("POD_IP")
 	registry := prober.NewRegistry(selfIP)
 
-	// Start watching StaticTarget CRDs in the background
+	// Initialize the unified KubeWatcher for EndpointSlices and peer topology
+	watcher := prober.NewKubeWatcher(clientset, registry)
+
+	var informerWG sync.WaitGroup
+
+	// 1. Prober Peer Discovery Informer
+	informerWG.Add(1)
 	go func() {
+		defer informerWG.Done()
+		watcher.WatchPeers(ctx)
+	}()
+
+	// StaticTarget CRDs Informer
+	informerWG.Add(1)
+	go func() {
+		defer informerWG.Done()
 		if err := prober.WatchStaticTargets(ctx, dynClient, registry); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("StaticTargets informer stopped", "error", err)
 		}
 	}()
 
-	// Initialize the unified KubeWatcher for EndpointSlices and peer topology
-	watcher := prober.NewKubeWatcher(clientset, registry)
-
-	// 1. Continuously watch prober peer replicas to rebalance targets upon HPA scaling events
-	go watcher.WatchPeers(ctx)
-
-	// 2. Start the EndpointSlice informer to dynamically discover annotated service endpoints
+	// EndpointSlice Informer
+	informerWG.Add(1)
 	go func() {
+		defer informerWG.Done()
 		if err := watcher.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("Informer watcher stopped", "error", err)
 		}
 	}()
 
+	// Close registry.Events strictly after all informers have terminated
+	go func() {
+		<-ctx.Done()
+		informerWG.Wait()
+		registry.Close()
+	}()
+
 	// Track active per-target scheduler cancellation functions
 	activeSchedulers := make(map[string]context.CancelFunc)
 	var schedMu sync.Mutex
-	
+
 	// 1. Initialize cleaner with the metric purge callback
 	cleaner := server.NewMetricsCleaner(prober.DeleteTargetMetrics)
 	// Start the internal HTTP server to expose Prometheus metrics and health probes (:8080)
@@ -146,43 +160,46 @@ func main() {
 	go srv.Start()
 
 	// Event loop: handle target additions, rebalancing decisions, and removals from the registry
+	var eventLoopWG sync.WaitGroup
+	eventLoopWG.Add(1)
+
 	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case evt, ok := <-registry.Events:
-				if !ok {
-					return
+		defer eventLoopWG.Done()
+		// Liest automatisch alle Events ab und beendet sich, sobald registry.Close() aufgerufen wird
+		for evt := range registry.Events {
+			if evt.IsAdded {
+				cleaner.AbortDeletion(evt.Target.Address)
+
+				var shouldStart bool
+				var schedCtx context.Context
+
+				schedMu.Lock()
+				if _, exists := activeSchedulers[evt.Target.Address]; !exists {
+					var schedCancel context.CancelFunc
+					schedCtx, schedCancel = context.WithCancel(ctx)
+					activeSchedulers[evt.Target.Address] = schedCancel
+					shouldStart = true
 				}
+				schedMu.Unlock()
 
-				func() {
-					schedMu.Lock()
-					defer schedMu.Unlock()
+				if shouldStart {
+					slog.Info("New target discovered", "target", evt.Target.Address, "scheme", evt.Target.Scheme)
+					schedulerWG.Add(1)
+					go prober.TargetScheduler(schedCtx, evt.Target, jobs, probeInterval, &schedulerWG)
+				}
+			} else {
+				schedMu.Lock()
+				cancelFunc, exists := activeSchedulers[evt.Target.Address]
+				if exists {
+					delete(activeSchedulers, evt.Target.Address)
+				}
+				schedMu.Unlock()
 
-					if evt.IsAdded {
-						// Cancel any pending deferred deletion if target is re-added
-						cleaner.AbortDeletion(evt.Target.Address)
-
-						if _, exists := activeSchedulers[evt.Target.Address]; !exists {
-							slog.Info("New target discovered", "target", evt.Target.Address, "scheme", evt.Target.Scheme)
-							schedCtx, schedCancel := context.WithCancel(ctx)
-							activeSchedulers[evt.Target.Address] = schedCancel
-
-							schedulerWG.Add(1)
-							go prober.TargetScheduler(schedCtx, evt.Target, jobs, probeInterval, &schedulerWG)
-						}
-					} else {
-						if cancelFunc, exists := activeSchedulers[evt.Target.Address]; exists {
-							slog.Info("Target removed", "target", evt.Target.Address)
-							cancelFunc()
-							delete(activeSchedulers, evt.Target.Address)
-
-							// Queue post-scrape metric cleanup without blocking goroutines
-							cleaner.MarkForDeletion(evt.Target.Address)
-						}
-					}
-				}()
+				if exists {
+					slog.Info("Target removed", "target", evt.Target.Address)
+					cancelFunc()
+					cleaner.MarkForDeletion(evt.Target.Address)
+				}
 			}
 		}
 	}()
@@ -191,25 +208,29 @@ func main() {
 	<-ctx.Done()
 	slog.Info("Shutting down cleanly...")
 
-	// Phase 1: Stop all active target schedulers to prevent new job generation
+	// Wait till all Informers terminated
+	eventLoopWG.Wait()
+
+	// Stop all active target schedulers (stop producing new jobs)
 	schedMu.Lock()
 	for _, cancelFn := range activeSchedulers {
 		cancelFn()
 	}
 	schedMu.Unlock()
 
-	// Phase 2: Wait until all scheduler loops have exited completely
+	// Wait until all scheduler loops exit
 	schedulerWG.Wait()
 
-	// Phase 3: Close the job channel; workers will finish remaining buffered jobs and exit
+	// Close the channel to let workers drain the remaining queue
 	close(jobs)
 
-	// Phase 4: Gracefully stop the HTTP server allowing in-flight scrapes to complete
+	// Wait for all workers to finish remaining probe executions
+	workerWG.Wait()
+
+	// Shutdown HTTP server after all metrics updates are complete
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	_ = srv.Shutdown(shutdownCtx)
 
-	// Phase 5: Wait for all worker goroutines to drain the channel and finish
-	workerWG.Wait()
 	slog.Info("Goodbye.")
 }

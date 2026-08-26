@@ -1,6 +1,7 @@
 package prober
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -10,10 +11,13 @@ import (
 )
 
 func TestRegistry_StaticTargetPrecedence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	selfIP := "10.244.0.1"
 	peers := []string{selfIP}
 	r := NewRegistry(selfIP)
-	r.UpdatePeers(peers)
+	r.UpdatePeers(ctx, peers)
 
 	// Drain peer-update event
 	select {
@@ -24,7 +28,7 @@ func TestRegistry_StaticTargetPrecedence(t *testing.T) {
 	targetAddr := "http://10.244.2.5:8080/healthz"
 
 	// 1. Add static target via CRD
-	r.Add(Target{
+	r.Add(ctx, Target{
 		Name:    "static-svc",
 		Address: targetAddr,
 		Scheme:  "http",
@@ -56,7 +60,7 @@ func TestRegistry_StaticTargetPrecedence(t *testing.T) {
 		},
 	}
 
-	r.UpdateFromEndpointSlice(slice, "http", "/healthz")
+	r.UpdateFromEndpointSlice(ctx, slice, "http", "/healthz")
 
 	// Verify static target remained untouched and no duplicate event was triggered
 	r.mu.RLock()
@@ -76,14 +80,17 @@ func TestRegistry_StaticTargetPrecedence(t *testing.T) {
 }
 
 func TestRegistry_UpdatePeers_Rebalancing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	selfIP := "10.244.0.1"
 	peerIP := "10.244.0.2"
 
 	r := NewRegistry(selfIP)
-	r.UpdatePeers([]string{selfIP})
+	r.UpdatePeers(ctx, []string{selfIP})
 
 	targetAddr := "http://10.244.5.10:8080/metrics"
-	r.Add(Target{
+	r.Add(ctx, Target{
 		Name:    "demo-target",
 		Address: targetAddr,
 		Scheme:  "http",
@@ -100,7 +107,7 @@ func TestRegistry_UpdatePeers_Rebalancing(t *testing.T) {
 	}
 
 	// Scale prober cluster by adding a second peer
-	r.UpdatePeers([]string{selfIP, peerIP})
+	r.UpdatePeers(ctx, []string{selfIP, peerIP})
 
 	// If ownership transferred away from selfIP, verify deletion event is queued
 	r.mu.RLock()
