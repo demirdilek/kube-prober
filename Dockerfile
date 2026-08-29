@@ -11,6 +11,9 @@ ENV GOTOOLCHAIN=${GOTOOLCHAIN}
 
 WORKDIR /app
 
+# Install CA certificates for outgoing HTTPS requests
+RUN apk add --no-cache ca-certificates
+
 # 1. Cache dependencies
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -40,3 +43,4 @@ COPY --from=builder /app/kube-prober /app/kube-prober
 
 # Run application
 ENTRYPOINT ["/app/kube-prober"]
+
