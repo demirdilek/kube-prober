@@ -9,6 +9,13 @@ export
 IMAGE_REPO := ghcr.io/demirdilek/kube-prober
 IMAGE_TAG := $(shell awk '/^appVersion:/ {print $$2}' helm/kube-prober/Chart.yaml | tr -d '"')
 
+#Go toolchain for Multi Stage Build
+REPO_ROOT ?= $(shell pwd)
+GOLANG_VERSION=$(shell cat $(REPO_ROOT)/.go-version)
+GOTOOLCHAIN ?= go$(GOLANG_VERSION)
+# Pinned Builder Digest analog to Kubernetes test/images
+GOLANG_IMAGE?=golang@sha256:0ecdc2a9f6156af6451080bfe3d8382a662fcc4e209608c6f919e643453514c1
+
 # Helm & Argo CD variables
 RELEASE_NAME := kube-prober
 CHART_DIR := ./helm/kube-prober
@@ -104,7 +111,10 @@ apply-gitops: ## Register kube-prober Application in Argo CD
 
 local-deploy: argocd-local-enable ## Build local image, import to k3d, and force fresh pod restart
 	@echo "==> Building Docker image locally ($(IMAGE_TAG))..."
-	docker build -t $(IMAGE_REPO):$(IMAGE_TAG) .
+	docker build \
+			--build-arg GOLANG_IMAGE=$(GOLANG_IMAGE) \
+			--build-arg GOTOOLCHAIN=$(GOTOOLCHAIN) \
+			-t $(IMAGE_REPO):$(IMAGE_TAG) .
 	@echo "==> Importing image into k3d cluster..."
 	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
 	@echo "==> Purging old pods to release all sockets & memory..."
