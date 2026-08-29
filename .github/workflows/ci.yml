@@ -2,26 +2,26 @@ name: CI & CD
 
 on:
   push:
-    branches: [ "main", "master" ]
-    tags: [ 'v*.*.*' ]
+    branches: ["main", "master"]
+    tags: ["v*.*.*"]
     paths:
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Dockerfile'
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
   pull_request:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
     paths:
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Dockerfile'
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     permissions:
-      contents: read 
+      contents: read
       packages: write
 
     steps:
@@ -31,7 +31,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26.5'
+          go-version: "1.26.5"
           cache: true
 
       - name: Run Tests
@@ -65,3 +65,4 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
