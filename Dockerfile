@@ -1,7 +1,8 @@
 # ---------------------------------------------------
 # Stage 1: Build environment - Special thanks to @liggitt, @BenTheElder for inspiring
 # ---------------------------------------------------
-ARG GOLANG_IMAGE=golang:latest
+ARG GOLANG_IMAGE=golang@sha256:0ecdc2a9f6156af6451080bfe3d8382a662fcc4e209608c6f919e643453514c1
+ARG GOTOOLCHAIN=auto
 FROM --platform=$BUILDPLATFORM ${GOLANG_IMAGE} AS builder
 
 ARG TARGETOS
@@ -10,9 +11,6 @@ ARG GOTOOLCHAIN
 ENV GOTOOLCHAIN=${GOTOOLCHAIN}
 
 WORKDIR /app
-
-# Install CA certificates for outgoing HTTPS requests
-RUN apk add --no-cache ca-certificates
 
 # 1. Cache dependencies
 COPY go.mod go.sum ./
