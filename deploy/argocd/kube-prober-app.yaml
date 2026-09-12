@@ -4,15 +4,15 @@ metadata:
   name: kube-prober
   namespace: argocd
   finalizers:
-    - resources-finalizer.argocd.argoproj.io
+    - resources-finalizer.argocd.argoproj.io/foreground
 spec:
   project: default
   source:
-    repoURL: 'https://github.com/demirdilek/kube-prober.git'
+    repoURL: "https://github.com/demirdilek/kube-prober.git"
     targetRevision: HEAD
-    path: 'helm/kube-prober'
+    path: "helm/kube-prober"
   destination:
-    server: 'https://kubernetes.default.svc'
+    server: "https://kubernetes.default.svc"
     namespace: default
   syncPolicy:
     automated:
@@ -20,3 +20,9 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: kube-prober
+      jsonPointers:
+        - /spec/template/spec/containers/0/image
