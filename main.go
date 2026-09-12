@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/demirdilek/kube-prober/pkg/env"
 	"github.com/demirdilek/kube-prober/pkg/kube"
@@ -89,7 +90,7 @@ func main() {
 	jobs := make(chan prober.Job, jobQueueSize)
 
 	// Spawn the worker pool goroutines to process incoming probe jobs concurrently
-	for i := 0; i < numWorkers; i++ {
+	for range numWorkers {
 		workerWG.Add(1)
 		go prober.WorkerPool(ctx, jobs, dispatcher, probeTimeout, &workerWG)
 	}
@@ -115,39 +116,30 @@ func main() {
 	// Initialize the unified KubeWatcher for EndpointSlices and peer topology
 	watcher := prober.NewKubeWatcher(clientset, registry)
 
-	var informerWG sync.WaitGroup
+	// Erstellt eine Group, die an den Parent-Context gekoppelt ist
+	informerGroup, informerCtx := errgroup.WithContext(ctx)
 
 	// 1. Prober Peer Discovery Informer
-	informerWG.Add(1)
-	go func() {
-		defer informerWG.Done()
-		watcher.WatchPeers(ctx)
-	}()
+	informerGroup.Go(func() error {
+		watcher.WatchPeers(informerCtx)
+		return nil
+	})
 
-	// StaticTarget CRDs Informer
-	informerWG.Add(1)
-	go func() {
-		defer informerWG.Done()
-		if err := prober.WatchStaticTargets(ctx, dynClient, registry); err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("StaticTargets informer stopped", "error", err)
+	// 2. StaticTarget CRDs Informer
+	informerGroup.Go(func() error {
+		if err := prober.WatchStaticTargets(informerCtx, dynClient, registry); err != nil && !errors.Is(err, context.Canceled) {
+			return err
 		}
-	}()
+		return nil
+	})
 
-	// EndpointSlice Informer
-	informerWG.Add(1)
-	go func() {
-		defer informerWG.Done()
-		if err := watcher.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("Informer watcher stopped", "error", err)
+	// 3. EndpointSlice Informer
+	informerGroup.Go(func() error {
+		if err := watcher.Start(informerCtx); err != nil && !errors.Is(err, context.Canceled) {
+			return err
 		}
-	}()
-
-	// Close registry.Events strictly after all informers have terminated
-	go func() {
-		<-ctx.Done()
-		informerWG.Wait()
-		registry.Close()
-	}()
+		return nil
+	})
 
 	// Track active per-target scheduler cancellation functions
 	activeSchedulers := make(map[string]context.CancelFunc)
@@ -160,11 +152,11 @@ func main() {
 	go srv.Start()
 
 	// Event loop: handle target additions, rebalancing decisions, and removals from the registry
-	var eventLoopWG sync.WaitGroup
-	eventLoopWG.Add(1)
+	eventLoopDone := make(chan struct{})
 
 	go func() {
-		defer eventLoopWG.Done()
+		defer close(eventLoopDone)
+
 		// Liest automatisch alle Events ab und beendet sich, sobald registry.Close() aufgerufen wird
 		for evt := range registry.Events {
 			if evt.IsAdded {
@@ -208,25 +200,27 @@ func main() {
 	<-ctx.Done()
 	slog.Info("Shutting down cleanly...")
 
-	// Wait till all Informers terminated
-	eventLoopWG.Wait()
-
-	// Stop all active target schedulers (stop producing new jobs)
+	// 1. Cancel target schedulers immediately to stop generating new probe jobs
 	schedMu.Lock()
 	for _, cancelFn := range activeSchedulers {
 		cancelFn()
 	}
-	schedMu.Unlock()
 
-	// Wait until all scheduler loops exit
+	schedMu.Unlock()
 	schedulerWG.Wait()
 
-	// Close the channel to let workers drain the remaining queue
+	// 2. Wait for informers to fully stop, then close registry
+	if err := informerGroup.Wait(); err != nil {
+		slog.Error("Informer error during shutdown", "error", err)
+	}
+	registry.Close()
+
+	// 3. Wait for the event loop to drain and terminate
+	<-eventLoopDone
+
+	// 4. Drain and close worker jobs
 	close(jobs)
-
-	// Wait for all workers to finish remaining probe executions
 	workerWG.Wait()
-
 	// Shutdown HTTP server after all metrics updates are complete
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()

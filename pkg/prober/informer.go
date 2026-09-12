@@ -1,3 +1,5 @@
+// Package prober implements multi-protocol network probes, Kubernetes target discovery,
+// sharding, and Prometheus metrics collection.
 package prober
 
 import (
@@ -18,6 +20,7 @@ import (
 type KubeWatcher struct {
 	clientset kubernetes.Interface
 	registry  *Registry
+	factory   informers.SharedInformerFactory
 }
 
 // NewKubeWatcher initializes a new KubeWatcher.
@@ -25,6 +28,7 @@ func NewKubeWatcher(clientset kubernetes.Interface, reg *Registry) *KubeWatcher 
 	return &KubeWatcher{
 		clientset: clientset,
 		registry:  reg,
+		factory:   informers.NewSharedInformerFactoryWithOptions(clientset, 10*time.Minute),
 	}
 }
 
@@ -68,19 +72,14 @@ func (w *KubeWatcher) getProbeSchemeAndPath(slice *discoveryv1.EndpointSlice, sv
 
 // Start begins watching EndpointSlices and Services for dynamic target discovery.
 func (w *KubeWatcher) Start(ctx context.Context) error {
-	factory := informers.NewSharedInformerFactoryWithOptions(
-		w.clientset,
-		10*time.Minute,
-	)
-
-	endpointSliceInformer := factory.Discovery().V1().EndpointSlices().Informer()
+	endpointSliceInformer := w.factory.Discovery().V1().EndpointSlices().Informer()
 
 	// Instantiate Service Informer and Lister to enable local RAM caching
-	serviceInformer := factory.Core().V1().Services().Informer()
-	serviceLister := factory.Core().V1().Services().Lister()
+	serviceInformer := w.factory.Core().V1().Services().Informer()
+	serviceLister := w.factory.Core().V1().Services().Lister()
 
 	_, err := endpointSliceInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
+		AddFunc: func(obj any) {
 			if slice, ok := obj.(*discoveryv1.EndpointSlice); ok {
 				if slice.Labels["probe"] == "true" {
 					// Pass the serviceLister for fast annotation lookup
@@ -89,7 +88,7 @@ func (w *KubeWatcher) Start(ctx context.Context) error {
 				}
 			}
 		},
-		UpdateFunc: func(oldObj, newObj interface{}) {
+		UpdateFunc: func(oldObj, newObj any) {
 			if newSlice, ok := newObj.(*discoveryv1.EndpointSlice); ok {
 				if newSlice.Labels["probe"] == "true" {
 					// Pass the serviceLister for fast annotation lookup
@@ -101,7 +100,7 @@ func (w *KubeWatcher) Start(ctx context.Context) error {
 				}
 			}
 		},
-		DeleteFunc: func(obj interface{}) {
+		DeleteFunc: func(obj any) {
 			// 1. Try to cast the object directly to an EndpointSlice
 			slice, ok := obj.(*discoveryv1.EndpointSlice)
 
@@ -129,7 +128,7 @@ func (w *KubeWatcher) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to add event handler to EndpointSlice informer: %w", err)
 	}
 
-	factory.Start(ctx.Done())
+	w.factory.Start(ctx.Done())
 
 	// Wait until BOTH caches (EndpointSlices AND Services) are fully synchronized
 	if !cache.WaitForCacheSync(ctx.Done(), endpointSliceInformer.HasSynced, serviceInformer.HasSynced) {
@@ -142,12 +141,7 @@ func (w *KubeWatcher) Start(ctx context.Context) error {
 // WatchPeers observes EndpointSlices of the prober deployment itself
 // to keep the active replica topology synced for Rendezvous Hashing.
 func (w *KubeWatcher) WatchPeers(ctx context.Context) {
-	factory := informers.NewSharedInformerFactoryWithOptions(
-		w.clientset,
-		10*time.Minute,
-	)
-
-	informer := factory.Discovery().V1().EndpointSlices().Informer()
+	informer := w.factory.Discovery().V1().EndpointSlices().Informer()
 
 	updatePeers := func() {
 		var peerIPs []string
@@ -170,13 +164,16 @@ func (w *KubeWatcher) WatchPeers(ctx context.Context) {
 	}
 
 	_, _ = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj interface{}) { updatePeers() },
-		UpdateFunc: func(oldObj, newObj interface{}) { updatePeers() },
-		DeleteFunc: func(obj interface{}) { updatePeers() },
+		AddFunc:    func(obj any) { updatePeers() },
+		UpdateFunc: func(oldObj, newObj any) { updatePeers() },
+		DeleteFunc: func(obj any) { updatePeers() },
 	})
 
-	factory.Start(ctx.Done())
-	cache.WaitForCacheSync(ctx.Done(), informer.HasSynced)
+	w.factory.Start(ctx.Done())
+
+	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+		return
+	}
 
 	updatePeers()
 	<-ctx.Done()

@@ -61,7 +61,7 @@ test-coverage: ## Run tests and generate HTML coverage report
 
 # ---  BOOTSTRAP (Run once for setup) ---
 
-bootstrap: k3d-up cache-test-images prometheus-install install-argocd apply-gitops ## Setup cluster, cache images, and deploy core infra
+bootstrap: k3d-up prometheus-install install-argocd apply-gitops ## Setup cluster, cache images, and deploy core infra
 	@echo "========================================================="
 	@echo " kube-prober stack is fully up and running out-of-the-box! "
 	@echo "========================================================="
@@ -70,7 +70,10 @@ k3d-up: ## Create local k3d cluster if it doesn't exist
 	@if k3d cluster list | grep -q "mycluster"; then \
 		echo "Cluster 'mycluster' already exists."; \
 	else \
-		k3d cluster create mycluster --api-port 6443 -p "80:80@loadbalancer" -p "443:443@loadbalancer" --agents 2; \
+		k3d cluster create mycluster \
+			--registry-create mycluster-registry:5001 \
+			--api-port 6443 -p "80:80@loadbalancer" -p "443:443@loadbalancer" \
+			--agents 2; \
 	fi
 
 k3d-down: ## Delete local k3d cluster
@@ -80,15 +83,6 @@ hard-reset: k3d-down clean bootstrap ## Deep clean cluster and rebuild stack fre
 
 clean: k3d-down ## Clean up temporary build files
 	rm -f coverage.out coverage.html .argo.pid .prom.pid .grafana.pid .prober.pid
-
-cache-test-images: 
-	@echo "==> Pulling and caching external test images..."
-	docker pull mccutchen/go-httpbin:v2.14.0
-	k3d image import mccutchen/go-httpbin:v2.14.0 -c mycluster
-	docker pull registry.k8s.io/e2e-test-images/agnhost:2.45 || true
-	k3d image import registry.k8s.io/e2e-test-images/agnhost:2.45 -c mycluster || true
-	docker pull gcr.io/google-samples/microservices-demo/shippingservice:v0.8.0 || true
-	k3d image import gcr.io/google-samples/microservices-demo/shippingservice:v0.8.0 -c mycluster || true
 
 prometheus-install: ## Install or upgrade Prometheus stack
 	@./scripts/deploy-prometheus.sh
@@ -103,20 +97,29 @@ install-argocd: ## Install Argo CD v3.5.1
 	kubectl wait --for=condition=available deployment/argocd-applicationset-controller -n $(ARGO_NAMESPACE) --timeout=300s
 
 apply-gitops: ## Register kube-prober Application in Argo CD
+	@echo "==> Waiting for Argo CD CRDs and server to become ready..."
+	kubectl wait --for=condition=established --timeout=60s crd/applications.argoproj.io
+	kubectl rollout status deployment/argocd-server -n argocd --timeout=90s
 	@echo "==> Registering kube-prober Application in Argo CD..."
 	kubectl apply -f deploy/argocd/kube-prober-app.yaml
+	@echo "==> Triggering initial sync..."
+	kubectl patch application kube-prober -n argocd --type merge -p '{"operation":{"sync":{"prune":true}}}' || true
 
 # --- 3. INNER DEV LOOP (Run frequently during development) ---
-
 
 local-deploy: argocd-local-enable ## Build local image, import to k3d, and force fresh pod restart
 	@echo "==> Building Docker image locally ($(IMAGE_TAG))..."
 	docker build \
+			--output type=docker \
 			--build-arg GOLANG_IMAGE=$(GOLANG_IMAGE) \
 			--build-arg GOTOOLCHAIN=$(GOTOOLCHAIN) \
 			-t $(IMAGE_REPO):$(IMAGE_TAG) .
 	@echo "==> Importing image into k3d cluster..."
 	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
+	@if ! kubectl get deployment kube-prober -n default >/dev/null 2>&1; then \
+		echo "==> Deployment not found. Deploying initial Helm release..."; \
+		helm upgrade --install kube-prober ./deploy/helm/kube-prober -n default; \
+	fi
 	@echo "==> Purging old pods to release all sockets & memory..."
 	kubectl delete pod -l app.kubernetes.io/name=kube-prober -n default --now 2>/dev/null || true
 	@echo "==> Waiting for fresh pod rollout..."
