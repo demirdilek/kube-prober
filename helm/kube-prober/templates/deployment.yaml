@@ -29,7 +29,7 @@ spec:
           labelSelector:
             matchLabels:
               # Must match the template labels for topology spread to work
-              {{- include "kube-prober.selectorLabels" . | nindent 10 }}
+              {{- include "kube-prober.selectorLabels" . | nindent 14 }}
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}
