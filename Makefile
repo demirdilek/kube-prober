@@ -257,7 +257,7 @@ release: ## Bump version, update manifests, commit, tag, and push (e.g. make rel
 	@$(SED) 's|ghcr.io/demirdilek/kube-prober:v*[0-9]*\.[0-9]*\.[0-9]*|ghcr.io/demirdilek/kube-prober:$(V)|g' README.md
 	@git add helm/kube-prober/Chart.yaml README.md
 	@git commit -m "chore(release): bump version to $(V)"
-	@git tag v$(V)
+	@git tag v$(V) -m "Release v$(V)"
 	@echo "==> Pushing commit and tag v$(V)..."
 	@git push origin main
 	@git push origin v$(V)
