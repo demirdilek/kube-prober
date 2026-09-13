@@ -4,16 +4,16 @@ set -euo pipefail
 ACTION="${1:-apply}"
 
 if [ "$ACTION" == "clean" ] || [ "$ACTION" == "delete" ]; then
-    echo "==> [Saturation] Cleaning up simulated saturation targets..."
-    kubectl delete statictarget -l test-type=saturation-hang -n default --ignore-not-found
-    kubectl delete deployment httpbin-saturation -n default --ignore-not-found
-    kubectl delete service httpbin-saturation -n default --ignore-not-found
-    
-    echo "==> Restoring prober worker pool capacity (WORKERS=50)..."
-    kubectl set env deployment/kube-prober WORKERS=50 -n default
-    kubectl rollout status deployment/kube-prober -n default --timeout=60s
-    echo "==> Saturation scenario cleaned up."
-    exit 0
+	echo "==> [Saturation] Cleaning up simulated saturation targets..."
+	kubectl delete statictarget -l test-type=saturation-hang -n default --ignore-not-found
+	kubectl delete deployment httpbin-saturation -n default --ignore-not-found
+	kubectl delete service httpbin-saturation -n default --ignore-not-found
+
+	echo "==> Restoring prober worker pool capacity (WORKERS=50)..."
+	kubectl set env deployment/kube-prober WORKERS=50 -n default
+	kubectl rollout status deployment/kube-prober -n default --timeout=60s
+	echo "==> Saturation scenario cleaned up."
+	exit 0
 fi
 
 echo "==> [Saturation] Throttling kube-prober worker pool to WORKERS=2..."
@@ -58,40 +58,23 @@ spec:
   - name: http
     port: 8080
     targetPort: 8080
----
+EOF
+
+echo "==> Deploying 55 blocking StaticTargets (/delay/10)..."
+for i in $(seq 1 55); do
+	cat <<EOF | kubectl apply -f -
 apiVersion: kube-prober.io/v1alpha1
 kind: StaticTarget
 metadata:
-  name: saturation-hang-1
+  name: saturation-hang-$i
   namespace: default
   labels:
     test-type: saturation-hang
 spec:
-  address: http://httpbin-saturation.default.svc.cluster.local:8080/delay/10
-  scheme: http
----
-apiVersion: kube-prober.io/v1alpha1
-kind: StaticTarget
-metadata:
-  name: saturation-hang-2
-  namespace: default
-  labels:
-    test-type: saturation-hang
-spec:
-  address: http://httpbin-saturation.default.svc.cluster.local:8080/delay/10
-  scheme: http
----
-apiVersion: kube-prober.io/v1alpha1
-kind: StaticTarget
-metadata:
-  name: saturation-hang-3
-  namespace: default
-  labels:
-    test-type: saturation-hang
-spec:
-  address: http://httpbin-saturation.default.svc.cluster.local:8080/delay/10
+  address: http://httpbin-saturation.default.svc.cluster.local:8080/delay/10?slot=$i
   scheme: http
 EOF
+done
 
 echo "==> Waiting for httpbin-saturation rollout..."
 kubectl rollout status deployment/httpbin-saturation -n default --timeout=60s

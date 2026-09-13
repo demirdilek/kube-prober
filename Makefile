@@ -1,6 +1,19 @@
 -include .env
 export
 
+# Shell configuration for cross-platform deterministic behavior
+SHELL := /usr/bin/env bash
+.SHELLFLAGS := -eu -o pipefail -c
+
+# OS Detection & Tool Abstraction
+UNAME_S := $(shell uname -s)
+
+ifeq ($(UNAME_S),Darwin)
+	SED := sed -i '' -e
+else
+	SED := sed -i -e
+endif
+
 .PHONY: $(shell awk -F':' '/^[a-zA-Z0-9_-]+:/ {print $$1}' $(MAKEFILE_LIST))
 
 .DEFAULT_GOAL := help
@@ -9,7 +22,7 @@ export
 IMAGE_REPO := ghcr.io/demirdilek/kube-prober
 IMAGE_TAG := $(shell awk '/^appVersion:/ {print $$2}' helm/kube-prober/Chart.yaml | tr -d '"')
 
-#Go toolchain for Multi Stage Build
+# Go toolchain for Multi Stage Build
 REPO_ROOT ?= $(shell pwd)
 GOLANG_VERSION=$(shell cat $(REPO_ROOT)/.go-version)
 GOTOOLCHAIN ?= go$(GOLANG_VERSION)
@@ -26,8 +39,8 @@ help: ## Show this help message
 	@echo "================================================================================"
 	@echo "  kube-prober - Kubernetes-Native Probing & Observability Engine"
 	@echo "================================================================================"
-	@echo "  Goal:  Event-driven target discovery and multi-protocol health monitoring"
-	@echo "         (HTTP, TCP, TLS, gRPC) exporting 4 Golden Signals to Prometheus."
+	@echo "  Goal:   Event-driven target discovery and multi-protocol health monitoring"
+	@echo "          (HTTP, TCP, TLS, gRPC) exporting 4 Golden Signals to Prometheus."
 	@echo ""
 	@echo "  Usage: make <target>"
 	@echo ""
@@ -74,6 +87,8 @@ k3d-up: ## Create local k3d cluster if it doesn't exist
 			--registry-create mycluster-registry:5001 \
 			--api-port 6443 -p "80:80@loadbalancer" -p "443:443@loadbalancer" \
 			--agents 2; \
+		echo "==> Waiting for all nodes to become ready..."; \
+		kubectl wait --for=condition=Ready nodes --all --timeout=60s; \
 	fi
 
 k3d-down: ## Delete local k3d cluster
@@ -87,14 +102,19 @@ clean: k3d-down ## Clean up temporary build files
 prometheus-install: ## Install or upgrade Prometheus stack
 	@./scripts/deploy-prometheus.sh
 
-install-argocd: ## Install Argo CD v3.5.1
-	@echo "==> Installing Argo CD v3.5.1..."
-	kubectl create namespace $(ARGO_NAMESPACE) || true
-	kubectl apply -n $(ARGO_NAMESPACE) --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.1/manifests/install.yaml
-	@echo "==> Waiting for Argo CD components to be ready..."
-	kubectl wait --for=condition=available deployment/argocd-server -n $(ARGO_NAMESPACE) --timeout=300s
-	kubectl wait --for=condition=available deployment/argocd-repo-server -n $(ARGO_NAMESPACE) --timeout=300s
-	kubectl wait --for=condition=available deployment/argocd-applicationset-controller -n $(ARGO_NAMESPACE) --timeout=300s
+install-argocd: ## Install Argo CD v7.7.16 (lean local footprint)
+	@echo "==> Adding Argo Helm repository..."
+	helm repo add argo https://argoproj.github.io/argo-helm
+	helm repo update argo
+	@echo "==> Installing Argo CD via Helm (pinned v7.7.16)..."
+	helm upgrade --install argocd argo/argo-cd \
+		--namespace argocd \
+		--create-namespace \
+		--version 7.7.16 \
+		--set server.extraArgs="{--insecure}" \
+		--set dex.enabled=false \
+		--set notifications.enabled=false \
+		--wait --timeout 600s
 
 apply-gitops: ## Register kube-prober Application in Argo CD
 	@echo "==> Waiting for Argo CD CRDs and server to become ready..."
@@ -118,7 +138,7 @@ local-deploy: argocd-local-enable ## Build local image, import to k3d, and force
 	k3d image import $(IMAGE_REPO):$(IMAGE_TAG) -c mycluster
 	@if ! kubectl get deployment kube-prober -n default >/dev/null 2>&1; then \
 		echo "==> Deployment not found. Deploying initial Helm release..."; \
-		helm upgrade --install kube-prober ./deploy/helm/kube-prober -n default; \
+		helm upgrade --install kube-prober $(CHART_DIR) -n default; \
 	fi
 	@echo "==> Purging old pods to release all sockets & memory..."
 	kubectl delete pod -l app.kubernetes.io/name=kube-prober -n default --now 2>/dev/null || true
@@ -212,7 +232,7 @@ argocd-local-disable: ## Re-enable Argo CD auto-sync via kubectl
 
 argocd-pass: ## Retrieve initial admin password for Argo CD UI
 	@echo "==> Argo CD Initial Admin Password:"
-	@kubectl -n argocd get secret argocd-initialadmin-secret -o jsonpath="{.data.password}" 2>/dev/null | base64 -d || echo "Initial secret deleted." ; echo""
+	@kubectl -n argocd get secret argocd-initialadmin-secret -o jsonpath="{.data.password}" 2>/dev/null | base64 -d || echo "Initial secret deleted." ; echo ""
 
 argocd-set-pass: ## Set a custom Argo CD admin password using the running pod
 	@MYPASS="admin1234"; \
@@ -226,10 +246,15 @@ release: ## Bump version, update manifests, commit, tag, and push (e.g. make rel
 		echo "Error: Version parameter missing. Usage: make release V=1.0.2"; \
 		exit 1; \
 	fi
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "Error: Git working tree is dirty. Commit or stash changes before releasing."; \
+		git status --short; \
+		exit 1; \
+	fi
 	@echo "==> Bumping version to $(V)..."
-	@sed -i 's/^version:.*/version: $(V)/' helm/kube-prober/Chart.yaml
-	@sed -i 's/^appVersion:.*/appVersion: "$(V)"/' helm/kube-prober/Chart.yaml
-	@sed -i 's|ghcr.io/demirdilek/kube-prober:[0-9]*\.[0-9]*\.[0-9]*|ghcr.io/demirdilek/kube-prober:$(V)|g' README.md
+	@$(SED) 's/^version:.*/version: $(V)/' helm/kube-prober/Chart.yaml
+	@$(SED) 's/^appVersion:.*/appVersion: "$(V)"/' helm/kube-prober/Chart.yaml
+	@$(SED) 's|ghcr.io/demirdilek/kube-prober:v*[0-9]*\.[0-9]*\.[0-9]*|ghcr.io/demirdilek/kube-prober:$(V)|g' README.md
 	@git add helm/kube-prober/Chart.yaml README.md
 	@git commit -m "chore(release): bump version to $(V)"
 	@git tag v$(V)
