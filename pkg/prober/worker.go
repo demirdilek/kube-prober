@@ -18,7 +18,7 @@ func ProbeTarget(ctx context.Context, target Target, dispatcher *Dispatcher, tim
 
 	TrafficCounter.WithLabelValues(target.Address).Inc()
 
-	// Timeout aus Konfiguration statt festen 5s nutzen
+	// Use configured timeout instead of a fixed duration
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -42,12 +42,20 @@ func ProbeTarget(ctx context.Context, target Target, dispatcher *Dispatcher, tim
 	}
 }
 
-// WorkerPool reicht den timeout weiter
+// WorkerPool consumes jobs and forwards timeout settings to workers
 func WorkerPool(ctx context.Context, jobs <-chan Job, dispatcher *Dispatcher, timeout time.Duration, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	for job := range jobs {
-		ProbeTarget(ctx, job.Target, dispatcher, timeout)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job, ok := <-jobs:
+			if !ok {
+				return
+			}
+			ProbeTarget(ctx, job.Target, dispatcher, timeout)
+		}
 	}
 }
 
@@ -58,14 +66,22 @@ func TargetScheduler(ctx context.Context, target Target, jobs chan<- Job, interv
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	// enqueue tries non-blocking send or exits on context cancellation.
+	enqueue := func() bool {
+		select {
+		case jobs <- Job{Target: target}:
+			return true
+		case <-ctx.Done():
+			return false
+		default:
+			slog.Warn("Job queue full, probe dropped", "target", target.Address)
+			return true
+		}
+	}
+
 	// Initial immediate probe
-	select {
-	case jobs <- Job{Target: target}:
-	case <-ctx.Done():
+	if !enqueue() {
 		return
-	default:
-		// Queue full: skip immediate probe and wait for next interval tick
-		slog.Warn("Job queue full, probe dropped", "target", target.Address)
 	}
 
 	for {
@@ -73,13 +89,8 @@ func TargetScheduler(ctx context.Context, target Target, jobs chan<- Job, interv
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			select {
-			case jobs <- Job{Target: target}:
-			case <-ctx.Done():
+			if !enqueue() {
 				return
-			default:
-				// Queue full: skip immediate probe and wait for next interval tick
-				slog.Warn("Job queue full, probe dropped", "target", target.Address)
 			}
 		}
 	}
