@@ -49,26 +49,28 @@ func (r *Registry) ShouldProcessTarget(targetAddress string) bool {
 }
 
 func (r *Registry) emitEvent(ctx context.Context, evt TargetEvent) {
-	timeout := 100 * time.Millisecond
+	// For transient add events, drop fast if the queue is full
+	if evt.IsAdded {
+		timer := time.NewTimer(100 * time.Millisecond)
+		defer timer.Stop()
 
-	if !evt.IsAdded {
-		timeout = 2 * time.Second
+		select {
+		case <-ctx.Done():
+			return
+		case r.Events <- evt:
+			return
+		case <-timer.C:
+			slog.Warn("Registry events channel full, skipping transient add event", "target", evt.Target.Address)
+			return
+		}
 	}
 
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
+	// Deletion events must never be silently dropped to avoid leaking target schedulers
 	select {
 	case <-ctx.Done():
 		return
 	case r.Events <- evt:
 		return
-	case <-timer.C:
-		if !evt.IsAdded {
-			slog.Error("Failed to deliver target removal event", "target", evt.Target.Address)
-			return
-		}
-		slog.Warn("Registry events channel full, skipping transient add event", "target", evt.Target.Address)
 	}
 }
 
