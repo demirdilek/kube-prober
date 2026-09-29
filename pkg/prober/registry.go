@@ -49,22 +49,25 @@ func (r *Registry) ShouldProcessTarget(targetAddress string) bool {
 }
 
 func (r *Registry) emitEvent(ctx context.Context, evt TargetEvent) {
+	timeout := 100 * time.Millisecond
+
 	if !evt.IsAdded {
-		select {
-		case <-ctx.Done():
-			return
-		case r.Events <- evt:
-		case <-time.After(2 * time.Second):
-			slog.Error("Failed to deliver target removal event", "target", evt.Target.Address)
-		}
-		return
+		timeout = 2 * time.Second
 	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 
 	select {
 	case <-ctx.Done():
 		return
 	case r.Events <- evt:
-	case <-time.After(100 * time.Millisecond):
+		return
+	case <-timer.C:
+		if !evt.IsAdded {
+			slog.Error("Failed to deliver target removal event", "target", evt.Target.Address)
+			return
+		}
 		slog.Warn("Registry events channel full, skipping transient add event", "target", evt.Target.Address)
 	}
 }
