@@ -2,11 +2,13 @@ package prober
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestDispatcher_Execute(t *testing.T) {
-	d := NewDispatcher()
+	d := NewDispatcher(10)
 
 	// Mock probe functions to simulate different outcomes
 	mockHTTPProber := func(ctx context.Context, target Target) ErrorCategory {
@@ -72,4 +74,41 @@ func TestDispatcher_Execute(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDispatcher_SemaphoreContextCancellation(t *testing.T) {
+	// Semaphore with capacity 1
+	d := NewDispatcher(1)
+
+	blocker := make(chan struct{})
+
+	d.Register("block", func(ctx context.Context, target Target) ErrorCategory {
+		<-blocker
+		return ""
+	})
+
+	target := Target{Address: "block://test", Scheme: "block"}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	// First probe acquires the only slot and blocks
+	go func() {
+		defer wg.Done()
+		_ = d.Execute(context.Background(), target)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	// Second probe must time out when context expires while waiting for a slot
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	errCat := d.Execute(ctx, target)
+	if errCat != CategoryTimeout {
+		t.Fatalf("expected %v, got %v", CategoryTimeout, errCat)
+	}
+
+	close(blocker)
+	wg.Wait()
 }

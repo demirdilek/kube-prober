@@ -13,12 +13,19 @@ type ProbeFunc func(ctx context.Context, target Target) ErrorCategory
 type Dispatcher struct {
 	mu      sync.RWMutex
 	probers map[string]ProbeFunc
+	sem     chan struct{} // Counting semaphore Token bucket
 }
 
 // NewDispatcher initializes an empty dispatcher map
-func NewDispatcher() *Dispatcher {
+func NewDispatcher(maxConcurrency int) *Dispatcher {
+	var sem chan struct{}
+	if maxConcurrency > 0 {
+		sem = make(chan struct{}, maxConcurrency)
+	}
+
 	return &Dispatcher{
 		probers: make(map[string]ProbeFunc),
+		sem:     sem,
 	}
 }
 
@@ -31,6 +38,17 @@ func (d *Dispatcher) Register(scheme string, fn ProbeFunc) {
 
 // Execute resolves the scheme from the target struct and runs the corresponding ProbeFunc
 func (d *Dispatcher) Execute(ctx context.Context, target Target) ErrorCategory {
+	// Concurrency protection via non-blocking TryAcquire pattern
+	if d.sem != nil {
+		select {
+		case d.sem <- struct{}{}:
+			// Token acquire. Ensure release upon completion
+			defer func() { <-d.sem }()
+		case <-ctx.Done():
+			return CategoryTimeout
+		}
+	}
+
 	d.mu.RLock()
 	fn, exists := d.probers[target.Scheme]
 	d.mu.RUnlock()

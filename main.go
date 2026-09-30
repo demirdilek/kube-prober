@@ -58,8 +58,9 @@ func main() {
 		IdleConnTimeout:     90 * time.Second,
 	}
 
-	// Initialize protocol dispatcher and register respective health-check handlers
-	dispatcher := prober.NewDispatcher()
+	// Limit maximum outbound network operations (default 2x workers to prevent false drops)
+	maxConcurrentProbes := env.GetInt("MAX_CONCURRENT_PROBES", numWorkers*2)
+	dispatcher := prober.NewDispatcher(maxConcurrentProbes)
 
 	// Register HTTP/HTTPS handlers
 	httpProber := prober.NewHTTPProber(baseTransport)

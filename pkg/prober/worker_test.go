@@ -8,8 +8,7 @@ import (
 )
 
 func TestTargetScheduler(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, cancel := context.WithCancel(t.Context())
 
 	jobs := make(chan Job, 5)
 	var wg sync.WaitGroup
@@ -51,10 +50,10 @@ func TestTargetScheduler(t *testing.T) {
 }
 
 func TestWorkerPool(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	//	ctx, cancel := context.WithCancel(context.Background())
+	ctx := t.Context()
 
-	d := NewDispatcher()
+	d := NewDispatcher(10)
 
 	called := make(chan Target, 1)
 	mockProber := func(ctx context.Context, target Target) ErrorCategory {
