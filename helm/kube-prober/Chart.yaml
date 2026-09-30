@@ -2,6 +2,6 @@ apiVersion: v2
 name: kube-prober
 description: Helm chart for the Kube Prober
 type: application
-version: 1.0.8
-appVersion: "1.0.8"
+version: 1.0.9
+appVersion: "1.0.9"
 icon: https://raw.githubusercontent.com/demirdilek/kube-prober/main/assets/icon.svg
