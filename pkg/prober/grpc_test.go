@@ -17,19 +17,19 @@ func TestGRPCProber_ProbeGRPCTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to start local gRPC listener: %v", err)
 	}
-	defer listener.Close()
 
 	grpcServer := grpc.NewServer()
-	go func() {
-		_ = grpcServer.Serve(listener)
-	}()
-	defer grpcServer.Stop()
 
 	// Register standard gRPC health service and set status to SERVING
 	healthServer := health.NewServer()
 	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 	healthServer.SetServingStatus("MyService", healthpb.HealthCheckResponse_SERVING)
 	healthpb.RegisterHealthServer(grpcServer, healthServer)
+
+	go func() {
+		_ = grpcServer.Serve(listener)
+	}()
+	defer grpcServer.Stop()
 
 	validTarget := Target{
 		Name:    "local-grpc-server",
