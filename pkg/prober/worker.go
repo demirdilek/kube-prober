@@ -2,6 +2,7 @@ package prober
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -59,6 +60,9 @@ func WorkerPool(ctx context.Context, jobs <-chan Job, dispatcher *Dispatcher, ti
 	}
 }
 
+// ErrJobDropped  zero heap allocations in the hot path
+var ErrJobDropped = errors.New("prober: job queue full, probe dropped")
+
 // TargetScheduler pushes probe jobs into the jobs channel periodically.
 func TargetScheduler(ctx context.Context, target Target, jobs chan<- Job, interval time.Duration, wg *sync.WaitGroup) {
 	defer wg.Done()
@@ -67,20 +71,21 @@ func TargetScheduler(ctx context.Context, target Target, jobs chan<- Job, interv
 	defer ticker.Stop()
 
 	// enqueue tries non-blocking send or exits on context cancellation.
-	enqueue := func() bool {
+	enqueue := func() error {
 		select {
 		case jobs <- Job{Target: target}:
-			return true
+			return nil
 		case <-ctx.Done():
-			return false
+			return ctx.Err()
 		default:
-			slog.Warn("Job queue full, probe dropped", "target", target.Address)
-			return true
+			// Increment counter with zero log I/O overhead
+			DroppedProbesTotal.WithLabelValues(target.Address).Inc()
+			return ErrJobDropped
 		}
 	}
 
 	// Initial immediate probe
-	if !enqueue() {
+	if err := enqueue(); errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return
 	}
 
@@ -89,7 +94,12 @@ func TargetScheduler(ctx context.Context, target Target, jobs chan<- Job, interv
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !enqueue() {
+			if err := enqueue(); err != nil {
+				if errors.Is(err, ErrJobDropped) {
+					// Shedded cleanly; continue loop for next tick
+					continue
+				}
+				// Context cancelled or unrecoverable error; terminate scheduler
 				return
 			}
 		}

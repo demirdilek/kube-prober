@@ -65,6 +65,15 @@ var (
 		},
 		[]string{"target"},
 	)
+
+	// DroppedProbesTotal tracks probe jobs discarded due to queue saturation (Load Shedding).
+	DroppedProbesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kube_prober_dropped_probes_total",
+			Help: "Total number of probe jobs dropped due to a saturated queue.",
+		},
+		[]string{"target"},
+	)
 )
 
 // allCategories defines the complete list of registered SRE error categories.
@@ -91,6 +100,7 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		MaxWorkersGauge,
 		CategoryHintInfo,
 		TLSCertExpiryGauge,
+		DroppedProbesTotal,
 	)
 
 	// Pre-populate static troubleshooting hints for Prometheus info metrics
@@ -106,7 +116,7 @@ func DeleteTargetMetrics(target string) {
 	LatencyHistogram.DeleteLabelValues(target)
 	TrafficCounter.DeleteLabelValues(target)
 	TLSCertExpiryGauge.DeleteLabelValues(target)
-
+	DroppedProbesTotal.DeleteLabelValues(target)
 	// 2. Delete all error category variations for this specific target
 	for _, cat := range allCategories {
 		ErrorCounter.DeleteLabelValues(target, string(cat))

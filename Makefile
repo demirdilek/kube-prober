@@ -51,7 +51,7 @@ help: ## Show this help message
 	@echo "    make test-alert-*  Inject SRE fault scenarios (e.g. make test-alert-latency)"
 	@echo "================================================================================"
 	@echo ""
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "  %-28s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 # ---  QUALITY & TESTING ---
 
@@ -269,17 +269,17 @@ release: ## Bump version, update manifests, commit, tag, and push (e.g. make rel
 DEMO_NAMESPACE ?= default
 DEMO_REPLICAS  ?= 100
 
-demo-up: ## demo-up: Deploy discovery-demo workloads with configurable replicas (default: 100)
+demo-up: ## Deploy discovery-demo workloads with configurable replicas (default: 100)
 	@echo "==> Deploying discovery-demo ($(DEMO_REPLICAS) replicas)..."
 	kubectl apply -f deployments/discovery-demo.yaml -n $(DEMO_NAMESPACE)
 	kubectl scale deployment/discovery-demo --replicas=$(DEMO_REPLICAS) -n $(DEMO_NAMESPACE)
 	@echo "==> Waiting for discovery-demo pods to be ready..."
 	kubectl rollout status deployment/discovery-demo -n $(DEMO_NAMESPACE) --timeout=60s
 
-demo-scale: ## demo-scale: Scale discovery-demo replicas on demand (e.g. make demo-scale REPLICAS=50)
+demo-scale: ## Scale discovery-demo replicas on demand (e.g. make demo-scale REPLICAS=50)
 	@echo "==> Scaling discovery-demo to $(REPLICAS) replicas..."
 	kubectl scale deployment/discovery-demo --replicas=$(REPLICAS) -n $(DEMO_NAMESPACE)
 
-demo-down: ## demo-down: Tear down and delete discovery-demo resources
+demo-down: ## Tear down and delete discovery-demo resources
 	@echo "==> Deleting discovery-demo deployment and services..."
 	kubectl delete -f deployments/discovery-demo.yaml -n $(DEMO_NAMESPACE) --ignore-not-found=true
