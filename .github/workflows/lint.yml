@@ -1,6 +1,7 @@
 name: Linting (Go, Scripts & Helm)
 
 on:
+  workflow_dispatch:
   push:
     branches: ["main", "master"]
     paths:
@@ -8,6 +9,7 @@ on:
       - "go.mod"
       - "go.sum"
       - ".golangci.yml"
+      - ".github/**"
       - "scripts/**"
       - "helm/**"
   pull_request:
@@ -17,6 +19,7 @@ on:
       - "go.mod"
       - "go.sum"
       - ".golangci.yml"
+      - ".github/**"
       - "scripts/**"
       - "helm/**"
 
