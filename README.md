@@ -14,7 +14,7 @@
 
 ---
 
-## 📦 Container Image Specs
+## Container Image Specs
 
 - **Registry:** `ghcr.io/demirdilek/kube-prober:1.0.11`
 - **Base Image:** `scratch` (Minimalist & secure zero-OS runtime)
@@ -281,9 +281,7 @@ The setup allows you to simulate threshold violations for different Golden Signa
 | **TLS Cert Expiry** | Deploys expiring self-signed certificate | `make test-alert-tls-expiry` |
 | **TLS Handshake Failure** | Triggers TLS handshake alert by deploying an expired self-signed certificate. | `make test-alert-tls-handshake` |
 | **gRPC Service Failure** | Targets gRPC endpoint without `grpc.health.v1` | `make test-alert-grpc` |
-| **DNS Resolution Failure** | Targets a fake domain to simulate DNS resolution failure[cite: 1] | `make test-alert-dns` |
-
-```
+| **DNS Resolution Failure** | Targets a fake domain to simulate DNS resolution failure | `make test-alert-dns` |
 
 #### Fire All Scenarios Simultaneously
 
@@ -291,8 +289,6 @@ To trigger all alert scenarios concurrently:
 
 ```bash
 make test-alert-all
-```
-
 ```
 
 #### Cleanup
