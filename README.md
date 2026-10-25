@@ -5,6 +5,7 @@
 </div>
 
 [![CI](https://github.com/demirdilek/kube-prober/actions/workflows/ci.yml/badge.svg)](https://github.com/demirdilek/kube-prober/actions/workflows/ci.yml)
+[![Lint](https://github.com/demirdilek/kube-prober/actions/workflows/lint.yml/badge.svg)](https://github.com/demirdilek/kube-prober/actions/workflows/lint.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/demirdilek/kube-prober?color=00ADD8&logo=go)](https://github.com/demirdilek/kube-prober)
 [![Image Size](https://img.shields.io/badge/image%20size-51.8%20MB-blue?logo=docker)](https://github.com/demirdilek/kube-prober/pkgs/container/kube-prober)
@@ -136,27 +137,25 @@ The `kube-prober` microservice acts as the central observability engine. Using a
 
 ```text
 .
-├── .github/
-│   └── workflows/          # GitHub Actions CI/CD & Linting Pipelines
-├── assets/                 # Dokumentations-Screenshots & Grafiken
+├── assets/                 # Documentation screenshots & architecture diagrams
 ├── deploy/
-│   └── argocd/             # Argo CD Application Manifests (GitOps)
+│   └── argocd/             # Argo CD Application manifests (GitOps)
 ├── helm/
-│   └── kube-prober/        # Helm Chart (Deployment, RBAC, PrometheusRule, Dashboards)
-│       ├── dashboards/     # Auto-provisionierte Grafana Dashboards
-│       └── templates/      # Kubernetes Ressourcen & Alerting-Regeln
+│   └── kube-prober/        # Helm chart (Deployment, RBAC, PrometheusRule, Dashboards)
+│       ├── dashboards/     # Auto-provisioned Grafana dashboards
+│       └── templates/      # Kubernetes manifests & alerting rules
 ├── pkg/
-│   ├── env/                # Environment-Parsing & Konfigurations-Utilities
-│   ├── kube/               # Kubernetes Client Initialization & Fallback
-│   ├── prober/             # Core Probing Engine (HTTP, TCP, TLS, gRPC), Informer & Metrics
-│   └── server/             # Telemetrie & Health HTTP Server (/metrics, /healthz, /readyz)
+│   ├── env/                # Environment parsing & configuration utilities
+│   ├── kube/               # Kubernetes client initialization & fallback
+│   ├── prober/             # Core probing engine (HTTP, TCP, TLS, gRPC, DNS), informers & metrics
+│   └── server/             # Telemetry & health HTTP server (/metrics, /healthz, /readyz)
 ├── scripts/
-│   └── alerts/             # Shell-Skripte zur Simulation von Golden Signals & Alert-Tests
-├── Dockerfile              # Multi-stage, Multi-arch Build File
-├── Makefile                # Lifecycle Automatisierung (k3d, Build, Helm, Alert-Tests)
-├── main.go                 # Microservice Entry Point & Dependency Injection
-├── go.mod                  # Go Modul- & Abhängigkeitsdefinitionen
-└── prom-stack-values.yaml  # Prometheus Stack & Alertmanager Routing Konfiguration
+│   └── alerts/             # Shell scripts for Golden Signals & alert simulation
+├── Dockerfile              # Multi-stage, multi-arch container build
+├── Makefile                # Lifecycle automation (k3d, build, lint, test, alert simulation)
+├── main.go                 # Microservice entry point & dependency injection
+├── go.mod                  # Go module & dependency definitions
+└── prom-stack-values.yaml  # Prometheus stack & Alertmanager routing configuration
 ```
 
 ---
@@ -284,15 +283,19 @@ The setup allows you to simulate threshold violations for different Golden Signa
 | **gRPC Service Failure** | Targets gRPC endpoint without `grpc.health.v1` | `make test-alert-grpc` |
 | **DNS Resolution Failure** | Targets a fake domain to simulate DNS resolution failure[cite: 1] | `make test-alert-dns` |
 
-#### All
+```
 
-To fire all alerts at once
+#### Fire All Scenarios Simultaneously
+
+To trigger all alert scenarios concurrently:
 
 ```bash
 make test-alert-all
 ```
 
-#### 🧹 Cleanup
+```
+
+#### Cleanup
 
 To teardown all simulated targets and restore the prober baseline, run:
 
