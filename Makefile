@@ -57,7 +57,7 @@ help: ## Show this help message
 
 lint: ## Run Go, ShellCheck, and Helm linters
 	@echo "==> Running Go linter..."
-	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run ./... || go vet ./...
+	golangci-lint run ./...
 	@echo "==> Running ShellCheck..."
 	@command -v shellcheck >/dev/null 2>&1 && shellcheck scripts/*.sh scripts/**/*.sh || echo "shellcheck not installed, skipping..."
 	@echo "==> Running Helm lint..."
