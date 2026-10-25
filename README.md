@@ -119,7 +119,7 @@ The `kube-prober` microservice acts as the central observability engine. Using a
 
 ---
 
-## 🛡️ High Availability & Resilience Architecture
+## High Availability & Resilience Architecture
 
 `kube-prober` follows SRE production-readiness guidelines across 4 core resilience pillars:
 
