@@ -1,0 +1,80 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  allow-parallel-runners: true
+  modules-download-mode: readonly
+
+linters-settings:
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment
+      - shadow
+  gocyclo:
+    min-complexity: 15
+  dupl:
+    threshold: 100
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+  misspell:
+    locale: US
+  gosec:
+    excludes:
+      - G402
+  revive:
+    rules:
+      - name: exported
+        arguments:
+          - checkPrivateReceivers
+          - sayNothing
+      - name: blank-imports
+      - name: context-as-argument
+      - name: error-return
+      - name: error-naming
+      - name: if-return
+      - name: increment-decrement
+      - name: var-naming
+      - name: var-declaration
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosec
+    - contextcheck
+    - noctx
+    - revive
+    - unconvert
+    - goconst
+    - whitespace
+
+  exclusions:
+    rules:
+      # Exclude all noise from test files
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - goconst
+          - noctx
+          - revive
+          - contextcheck
+      # Ignore package-level comments and unused parameters across the project
+      - text: "package-comments:"
+        linters:
+          - revive
+      - text: "unused-parameter:"
+        linters:
+          - revive

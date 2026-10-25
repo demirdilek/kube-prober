@@ -163,23 +163,23 @@ func main() {
 			if evt.IsAdded {
 				cleaner.AbortDeletion(evt.Target.Address)
 
-				var shouldStart bool
-				var schedCtx context.Context
+				var schedCancel context.CancelFunc
+				shouldStart := false
 
 				schedMu.Lock()
 				if _, exists := activeSchedulers[evt.Target.Address]; !exists {
-					var schedCancel context.CancelFunc
+					//nolint:contextcheck // Scheduler lifecycle is derived from parent context on dynamic addition
+					var schedCtx context.Context
 					schedCtx, schedCancel = context.WithCancel(ctx)
 					activeSchedulers[evt.Target.Address] = schedCancel
 					shouldStart = true
-				}
-				schedMu.Unlock()
 
-				if shouldStart {
 					slog.Info("New target discovered", "target", evt.Target.Address, "scheme", evt.Target.Scheme)
 					schedulerWG.Add(1)
 					go prober.TargetScheduler(schedCtx, evt.Target, jobs, probeInterval, &schedulerWG)
 				}
+				schedMu.Unlock()
+				_ = shouldStart
 			} else {
 				schedMu.Lock()
 				cancelFunc, exists := activeSchedulers[evt.Target.Address]

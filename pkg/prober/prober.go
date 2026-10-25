@@ -14,6 +14,7 @@ import (
 // ErrorCategory represents the SRE error types.
 type ErrorCategory string
 
+// SRE error category definitions.
 const (
 	CategoryDNS               ErrorCategory = "dns_error"
 	CategoryTLS               ErrorCategory = "tls_error"

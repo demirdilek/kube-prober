@@ -15,6 +15,8 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+const probeEnabled = "true"
+
 // KubeWatcher observes K8s resources (EndpointSlices) to keep the target
 // registry in sync and maintain the active replica topology for sharding.
 type KubeWatcher struct {
@@ -81,7 +83,7 @@ func (w *KubeWatcher) Start(ctx context.Context) error {
 	_, err := endpointSliceInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) {
 			if slice, ok := obj.(*discoveryv1.EndpointSlice); ok {
-				if slice.Labels["probe"] == "true" {
+				if slice.Labels["probe"] == probeEnabled {
 					// Pass the serviceLister for fast annotation lookup
 					scheme, path := w.getProbeSchemeAndPath(slice, serviceLister)
 					w.registry.UpdateFromEndpointSlice(ctx, slice, scheme, path)
@@ -90,7 +92,7 @@ func (w *KubeWatcher) Start(ctx context.Context) error {
 		},
 		UpdateFunc: func(oldObj, newObj any) {
 			if newSlice, ok := newObj.(*discoveryv1.EndpointSlice); ok {
-				if newSlice.Labels["probe"] == "true" {
+				if newSlice.Labels["probe"] == probeEnabled {
 					// Pass the serviceLister for fast annotation lookup
 					scheme, path := w.getProbeSchemeAndPath(newSlice, serviceLister)
 					w.registry.UpdateFromEndpointSlice(ctx, newSlice, scheme, path)
@@ -119,7 +121,7 @@ func (w *KubeWatcher) Start(ctx context.Context) error {
 			}
 
 			// 3. Now that we safely have the 'slice', we can read its labels and clean up
-			if slice.Labels["probe"] == "true" {
+			if slice.Labels["probe"] == probeEnabled {
 				w.registry.RemoveEndpointSlice(ctx, slice, "", "")
 			}
 		},

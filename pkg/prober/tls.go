@@ -69,7 +69,8 @@ func (p *TLSProber) ProbeTLSTarget(ctx context.Context, target Target) ErrorCate
 	if err != nil {
 		return MapToCategory(err, 0)
 	}
-	defer conn.Close()
+
+	defer func() { _ = conn.Close() }()
 
 	// Clone base config to safely assign target-specific SNI and skip-verify flags
 	cfg := p.config.Clone()

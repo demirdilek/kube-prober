@@ -43,7 +43,8 @@ func (p *GRPCProber) ProbeGRPCTarget(ctx context.Context, target Target) ErrorCa
 	if err != nil {
 		return MapToCategory(err, 0)
 	}
-	defer conn.Close()
+
+	defer func() { _ = conn.Close() }()
 
 	// Perform gRPC Health Check directly with the request context
 	healthClient := healthpb.NewHealthClient(conn)

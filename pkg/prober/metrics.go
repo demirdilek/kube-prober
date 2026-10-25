@@ -4,35 +4,37 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+const targetLabel = "target"
+
 var (
-	// Latency measures probing duration in seconds per target endpoint.
+	// LatencyHistogram measures probing duration in seconds per target endpoint.
 	LatencyHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name: "kube_prober_latency_seconds",
 			Help: "The time taken to probe the target in seconds (Latency).",
 		},
-		[]string{"target"},
+		[]string{targetLabel},
 	)
 
-	// Traffic tracks the total cumulative count of health-check probes sent per target.
+	// TrafficCounter tracks the total cumulative count of health-check probes sent per target.
 	TrafficCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kube_prober_traffic_total",
 			Help: "Total number of probes sent to the target (Traffic).",
 		},
-		[]string{"target"},
+		[]string{targetLabel},
 	)
 
-	// Errors tracks failed probes categorized by target address and SRE error category.
+	// ErrorCounter tracks failed probes categorized by target address and SRE error category.
 	ErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kube_prober_errors_total",
 			Help: "Total number of failed probes (Errors).",
 		},
-		[]string{"target", "category"},
+		[]string{targetLabel, "category"},
 	)
 
-	// Saturation gauges current capacity by counting active concurrent worker goroutines.
+	// SaturationGauge gauges current capacity by counting active concurrent worker goroutines.
 	SaturationGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "kube_prober_saturation_active_workers",
@@ -63,7 +65,7 @@ var (
 			Name: "kube_prober_tls_cert_expiry_days",
 			Help: "Number of days until the TLS certificate expires.",
 		},
-		[]string{"target"},
+		[]string{targetLabel},
 	)
 
 	// DroppedProbesTotal tracks probe jobs discarded due to queue saturation (Load Shedding).
@@ -72,7 +74,7 @@ var (
 			Name: "kube_prober_dropped_probes_total",
 			Help: "Total number of probe jobs dropped due to a saturated queue.",
 		},
-		[]string{"target"},
+		[]string{targetLabel},
 	)
 )
 

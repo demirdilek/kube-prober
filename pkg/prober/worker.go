@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+// Job represents a probing task assigned to the worker pool.
 type Job struct {
 	Target Target
 }
